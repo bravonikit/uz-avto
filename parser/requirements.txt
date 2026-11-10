@@ -1,2 +1,4 @@
 # Библиотеки для парсера. Установка: pip install -r requirements.txt
-python-dotenv==1.0.1  # читает настройки и пароли из файла .env
+gallery-dl==1.32.19  # получает посты Instagram
+browser-cookie3==0.20.1  # берёт вход в Instagram из браузера
+requests==2.34.2  # скачивает картинки
