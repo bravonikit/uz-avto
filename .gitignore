@@ -36,6 +36,12 @@ yarn-error.log*
 # vercel
 .vercel
 
+# python parser
+parser/.venv/
+parser/.env
+!parser/.env.example
+__pycache__/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
