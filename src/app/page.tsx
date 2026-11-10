@@ -3,11 +3,11 @@
 import Link from "next/link";
 import { ListingCard } from "@/components/ListingCard";
 import { SearchForm } from "@/components/SearchForm";
-import { BRAND_NAMES } from "@/lib/catalog";
-import { searchListings } from "@/lib/listings";
+import { getBrandModels, searchListings } from "@/lib/listings";
 
 export default function HomePage() {
   const latest = searchListings({ sort: "new" }).slice(0, 8);
+  const brands = getBrandModels();
 
   return (
     <>
@@ -20,10 +20,10 @@ export default function HomePage() {
             Тысячи машин от владельцев и автосалонов — от Ташкента до Нукуса
           </p>
           <div className="mt-6 rounded-2xl bg-white p-4 shadow-xl sm:p-5">
-            <SearchForm />
+            <SearchForm brands={brands} />
           </div>
           <div className="mt-5 flex flex-wrap gap-2">
-            {BRAND_NAMES.map((brand) => (
+            {Object.keys(brands).map((brand) => (
               <Link
                 key={brand}
                 href={`/cars?brand=${encodeURIComponent(brand)}`}

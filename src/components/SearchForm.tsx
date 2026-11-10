@@ -4,16 +4,21 @@
 
 import Form from "next/form";
 import { useState } from "react";
-import { BRANDS, BRAND_NAMES, CITIES, YEARS } from "@/lib/catalog";
+import { CITIES, YEARS } from "@/lib/catalog";
 import type { ListingFilters } from "@/lib/listings";
 
 const field =
   "w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-100 disabled:text-slate-400";
 
-export function SearchForm({ initial = {} }: { initial?: ListingFilters }) {
+type Props = {
+  brands: Record<string, string[]>; // марка → модели
+  initial?: ListingFilters;
+};
+
+export function SearchForm({ brands, initial = {} }: Props) {
   const [brand, setBrand] = useState(initial.brand ?? "");
   const [model, setModel] = useState(initial.model ?? "");
-  const models = brand ? (BRANDS[brand] ?? []) : [];
+  const models = brand ? (brands[brand] ?? []) : [];
 
   return (
     // <Form> отправляет поля в адрес страницы: /cars?brand=Kia&city=Ташкент
@@ -29,7 +34,7 @@ export function SearchForm({ initial = {} }: { initial?: ListingFilters }) {
         aria-label="Марка"
       >
         <option value="">Все марки</option>
-        {BRAND_NAMES.map((name) => (
+        {Object.keys(brands).map((name) => (
           <option key={name}>{name}</option>
         ))}
       </select>

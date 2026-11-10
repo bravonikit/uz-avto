@@ -1,7 +1,7 @@
 """Выгружает объявления из Instagram для сайта (тестовый режим, без базы).
 
-Берёт:   data/raw_posts.json, data/prices.json
-Пишет:   ../src/data/instagram-listings.json
+Берёт:   data/<аккаунт>/raw_posts.json, data/<аккаунт>/prices.json по всем аккаунтам
+Пишет:   ../src/data/instagram-listings.json  (все аккаунты в одном файле)
          ../public/ig/<shortcode>.jpg
 
 Запуск: python export_to_site.py
@@ -10,14 +10,10 @@
 import json
 import re
 import shutil
-from pathlib import Path
 
-from download import PROFILE
+from accounts import PARSER_DIR, account_dir, load_accounts
 
-PARSER_DIR = Path(__file__).parent
 SITE_DIR = PARSER_DIR.parent
-RAW_POSTS_FILE = PARSER_DIR / "data" / "raw_posts.json"
-PRICES_FILE = PARSER_DIR / "data" / "prices.json"
 OUTPUT_FILE = SITE_DIR / "src" / "data" / "instagram-listings.json"
 SITE_IMAGES_DIR = SITE_DIR / "public" / "ig"
 
@@ -36,10 +32,32 @@ BRAND_NAMES = {
     "x-peng": "XPeng",
 }
 
+# Строки, которые не могут быть названием машины
+NOT_TITLE = re.compile(
+    r"^[\d\s()+\-]{7,}$|motors?\b|@|\bto.?lo.?v|bosh\s+to|рассрочк|nasiya|^narx|^цена|^price|^yili?\b|^год\b|^sotildi|^продано",
+    re.IGNORECASE,
+)
+# Слова в начале строки, которые не относятся к названию: "SOTUVDA — BMW X7", "Sedan: Malibu"
+TITLE_PREFIX = re.compile(
+    r"^(?:sotuvda|sotiladi|srochno|срочно|продается|продаётся|продаю|new|новый|новая|sedan|седан|crossover|кроссовер)\b[\s:—\-]*",
+    re.IGNORECASE,
+)
+# Марки из двух слов и разные написания одной марки
+TWO_WORD_BRANDS = {
+    ("mercedes", "benz"): "Mercedes-Benz", ("mersedes", "benz"): "Mercedes-Benz",
+    ("mersedez", "benz"): "Mercedes-Benz", ("land", "rover"): "Land Rover",
+}
+BRAND_ALIASES = {
+    "mercedes-benz": "Mercedes-Benz", "mercedes-amg": "Mercedes-Benz", "mercedes": "Mercedes-Benz",
+    "mersedes": "Mercedes-Benz", "chagan": "Changan", "dongfen": "Dongfeng", "leapmotors": "Leapmotor",
+    "range": "Land Rover", "deepal": "Deepal", "genesis": "Genesis", "toyota": "Toyota", "lexus": "Lexus",
+    "chevrolet": "Chevrolet", "kia": "Kia", "audi": "Audi", "porsche": "Porsche", "tesla": "Tesla",
+}
+
 # "Yili 2025/09", "Yili-2025/26Model" → 2025. "Yil Garantiya" сюда не подходит.
 YEAR_PATTERN = re.compile(r"\byili\s*[-:]?\s*((?:19|20)\d{2})", re.IGNORECASE)
 # "Probeg 20.000km", "Probeg 15.000", "Probeg 8200" → число после слова
-MILEAGE_PATTERN = re.compile(r"\bprobeg\s*[-:]?\s*(\d[\d.,]*)", re.IGNORECASE)
+MILEAGE_PATTERN = re.compile(r"\b(?:probeg\w*|пробег\w*)\s*[-:]?\s*(\d[\d.,]*)", re.IGNORECASE)
 NO_MILEAGE_PATTERN = re.compile(r"\bbez\s+probeg", re.IGNORECASE)
 
 
@@ -55,6 +73,11 @@ def find_title(text: str) -> tuple[str | None, bool]:
     """
     lines = [clean_line(line) for line in text.splitlines()]
     lines = [line for line in lines if line]
+    is_sold_any = bool(lines) and bool(SOLD_PATTERN.fullmatch(lines[0]))
+    lines = [TITLE_PREFIX.sub("", line).strip() for line in lines]
+    lines = [line for line in lines if line and not NOT_TITLE.search(line)]
+    if is_sold_any:
+        return (lines[0] if lines else None), True
     is_sold = bool(lines) and bool(SOLD_PATTERN.fullmatch(lines[0]))
     if is_sold:
         lines = lines[1:]
@@ -73,8 +96,16 @@ def split_title(title: str | None) -> tuple[str | None, str | None]:
     words = (title or "").split()
     if not words:
         return None, None
-    brand = BRAND_NAMES.get(words[0].lower(), normalize_word(words[0]))
-    model = normalize_word(words[1]) if len(words) > 1 else None
+    pair = tuple(w.lower() for w in words[:2])
+    if pair in TWO_WORD_BRANDS:
+        brand, rest = TWO_WORD_BRANDS[pair], words[2:]
+    else:
+        first = words[0].lower()
+        brand = BRAND_NAMES.get(first) or BRAND_ALIASES.get(first) or normalize_word(words[0])
+        rest = words[1:]
+        if first == "range":  # "Range Rover Vogue" → Land Rover, модель Range
+            rest = words[:1]
+    model = normalize_word(rest[0]) if rest else None
     return brand, model
 
 
@@ -104,17 +135,20 @@ def copy_image(post: dict) -> str | None:
     return f"/ig/{post['shortcode']}.jpg"
 
 
-def main() -> None:
-    posts = json.loads(RAW_POSTS_FILE.read_text(encoding="utf-8"))
-    prices = {item["url"]: item for item in json.loads(PRICES_FILE.read_text(encoding="utf-8"))}
-
-    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SITE_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+def account_listings(account: str) -> list[dict]:
+    """Объявления одного аккаунта (без анонсов и постов без цены)."""
+    raw_file = account_dir(account) / "raw_posts.json"
+    prices_file = account_dir(account) / "prices.json"
+    if not raw_file.exists() or not prices_file.exists():
+        print(f"  {account}: нет данных, сначала download.py и extract_price.py")
+        return []
+    posts = json.loads(raw_file.read_text(encoding="utf-8"))
+    prices = {item["url"]: item for item in json.loads(prices_file.read_text(encoding="utf-8"))}
 
     listings = []
     for post in posts:
         price = prices.get(post["url"])
-        if price is None or price["is_announcement"]:
+        if price is None or price["is_announcement"] or price["price"] is None:
             continue
 
         text = post["description"]
@@ -134,17 +168,30 @@ def main() -> None:
                 "description": text,
                 "is_sold": is_sold,
                 "source_url": post["url"],
-                "source_account": PROFILE,
+                "source_account": account,
                 "date": post["date"],
             }
         )
+    print(f"  {account}: {len(listings)} объявлений")
+    return listings
+
+
+def main() -> None:
+    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    SITE_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+
+    listings = []
+    for account in load_accounts():
+        listings.extend(account_listings(account))
+    # Свежие объявления первыми, вперемешку по аккаунтам
+    listings.sort(key=lambda item: item["date"], reverse=True)
 
     OUTPUT_FILE.write_text(json.dumps(listings, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def count(key: str) -> int:
         return sum(1 for item in listings if item[key] is not None)
 
-    print(f"Выгружено объявлений: {len(listings)} → {OUTPUT_FILE.relative_to(SITE_DIR)}")
+    print(f"\nВыгружено объявлений: {len(listings)} → {OUTPUT_FILE.relative_to(SITE_DIR)}")
     print(f"  с годом: {count('year')}, с пробегом: {count('mileage_km')}, с фото: {count('image')}")
     print(f"  с пометкой BARAKA BOLDI (вероятно, проданы): {sum(item['is_sold'] for item in listings)}")
 

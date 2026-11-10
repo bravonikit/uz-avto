@@ -17,7 +17,8 @@ type Props = {
 
 export function CarPhoto({ listing, view = 0, className = "" }: Props) {
   const [bgFrom, bgTo] = BACKGROUNDS[view % BACKGROUNDS.length];
-  const tall = ["Кроссовер", "Внедорожник", "Минивэн"].includes(listing.bodyType);
+  const tall = ["Кроссовер", "Внедорожник", "Минивэн"].includes(listing.bodyType ?? "");
+  const carColor = listing.color?.hex ?? "#94a3b8";
   const gradientId = `bg-${view}`;
 
   return (
@@ -44,7 +45,7 @@ export function CarPhoto({ listing, view = 0, className = "" }: Props) {
           <>
             <path
               d="M28 150 L30 118 Q34 104 58 100 L92 96 L112 62 Q118 52 134 52 L238 52 Q254 52 262 64 L280 96 Q298 100 298 116 L298 150 Z"
-              fill={listing.color.hex}
+              fill={carColor}
               stroke="#0f172a"
               strokeOpacity="0.25"
               strokeWidth="2"
@@ -56,7 +57,7 @@ export function CarPhoto({ listing, view = 0, className = "" }: Props) {
           <>
             <path
               d="M24 148 L30 124 Q38 110 66 106 L104 102 L136 76 Q148 68 166 68 L214 68 Q232 68 244 80 L268 104 L284 108 Q300 112 300 128 L300 148 Z"
-              fill={listing.color.hex}
+              fill={carColor}
               stroke="#0f172a"
               strokeOpacity="0.25"
               strokeWidth="2"

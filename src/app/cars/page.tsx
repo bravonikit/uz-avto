@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { ListingCard } from "@/components/ListingCard";
 import { SearchForm } from "@/components/SearchForm";
-import { filtersFromSearchParams, searchListings } from "@/lib/listings";
+import { filtersFromSearchParams, getBrandModels, searchListings } from "@/lib/listings";
 
 export const metadata: Metadata = { title: "Объявления о продаже авто" };
 
@@ -30,7 +30,7 @@ async function Results({ searchParams }: Pick<PageProps<"/cars">, "searchParams"
     <>
       <div className="mb-6 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
         {/* key заставляет форму обновиться, если фильтры в адресе поменялись */}
-        <SearchForm key={JSON.stringify(filters)} initial={filters} />
+        <SearchForm key={JSON.stringify(filters)} brands={getBrandModels()} initial={filters} />
       </div>
       <p className="mb-4 text-sm text-slate-500">Найдено объявлений: {listings.length}</p>
       {listings.length > 0 ? (

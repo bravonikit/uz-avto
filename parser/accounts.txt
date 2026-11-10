@@ -1,0 +1,137 @@
+# Instagram аккаунты для парсинга: по одному на строку, без @ и без ссылки.
+# Строки с # пропускаются. Чтобы временно выключить аккаунт, поставьте # перед ним.
+# За один запуск download.py берёт до 30 аккаунтов, давно не качавшиеся первыми.
+
+# В работе
+auto_sale_abdulloh
+xayrulloavto
+avtomir__uzb
+
+# Из Notion «Продавцы» (Перекуп / салон и Агрегатор, активные), выгружено 10.11.2026
+carsofsaleuz
+yaxshi.narxda
+cars_premium_motors
+avto_kredit_premium
+avto_otash
+avenue_motors
+carsaleuz
+inomarkachi_abdullo
+moshinasale
+germany_cars_uzb
+budget_carsuz
+gonzo_motors
+ev_cars.uz
+savlat__010
+abdulloh_motors
+hmgroup.uz
+hamidov.auto
+7motorsavto
+byd_rustam
+carsmir.uzb
+turon.avto
+kamolon_avto
+ac_inomarka
+ars.auto.uz
+bmw_bozor.uz
+autopriceuz
+carsofuzb
+700autoshop
+avto_sotamizz
+asl_auto.uz
+arzon.mashina
+zoirauto
+biloljon_motors
+izmir_motors_
+usmon.motors
+avtolux.premium
+turbosdelka.uz
+zafar_koreya_avto
+_el_777__
+mtg.nasiya.naxt.avtocar
+aza.avtoo
+evcarsaleuz
+721_motors
+autolux_uzb
+tez_motors
+fayz.avto
+real.motors_
+archa.kocha_avto
+faqat_nasiya_
+autovita.uz
+mashinabozoruz
+cip_tashkent_uz
+sharqavto
+hoji_eurocars
+avto.archa
+otash_avto_
+autoworld.uzb
+avto_naht
+maqsud.auto
+aliauto.uz
+
+# Найдены 10.11.2026 через «Похожие аккаунты»
+milliy_avto_bozori
+naxti_asal
+rostan.arzon
+dilshodnasyrov
+arzon_yoki_qimmatmi
+
+# Из Notion «Продавцы» с активностью «0 в месяц», выключены
+# dubaiuzbcars
+# worldcartrade.uz
+# avtovykupuz
+# dream_avtocredit
+# autocenter_nasiya
+# city_motors.uz
+# real_sanjikcars
+# _yas_auto_
+# leader_avto_city
+# vipmotors_uzb
+# baraka_avtoleasing
+# moshinabozoruz_premium
+# autotorg.12
+# baraka__cars
+# evbozor
+
+# Выключены 10.11.2026: в 10 последних постах цены нет или она в 1-2 постах из 10
+# _aaa_cars_
+# abozor.comfort
+# azdex.uz
+# drivicouz
+# ixtiyor_inomarka
+# kingmotors_uz
+# maxmotors_uz
+# moment.motors_uz
+# muzaffar_lux_auto
+# shohrux_autocenter
+# timur_moment
+# auto.tash
+# avto_sroj
+# lux_autouz
+# uz.elite.car
+# fayz_automotors
+# sotibolamiz.sotamiz
+# cartex_tashkent
+# bro.cars.uz
+# carista.uz
+# inomarka.hayda
+# avto_baza.uz
+# avtojek.uz
+# auto_taqsit
+# eskishahar_avto
+# sergeli_auto
+# evhub_motors
+# allibekoff
+# abozor.uz
+# mirjalol_auto_sale
+# tashauto_center
+# autosotamiz
+# auto_sale_umar
+# avtojek
+# islomxon_avtoluxury
+# avtosales_tashkent
+# kichkina_inomarkachi
+# uzb_carsmotors
+# sarvar_avto_
+# avto_market_sale
+# moshinachi__bola

@@ -5,7 +5,7 @@ export function Header() {
     <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/90 backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center gap-6 px-4 py-3">
         <Link href="/" className="text-xl font-extrabold tracking-tight text-slate-900">
-          Mashina<span className="text-emerald-600">.</span>
+          Mashina Bashina<span className="text-emerald-600">.</span>
         </Link>
         <nav className="flex flex-1 items-center gap-4 text-sm text-slate-600">
           <Link href="/cars" className="hover:text-slate-900">

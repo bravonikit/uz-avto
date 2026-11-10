@@ -12,8 +12,8 @@ const inter = Inter({
 
 export const metadata: Metadata = {
   title: {
-    default: "Mashina — купить и продать авто в Узбекистане",
-    template: "%s — Mashina",
+    default: "Mashina Bashina — купить и продать авто в Узбекистане",
+    template: "%s — Mashina Bashina",
   },
   description: "Объявления о продаже автомобилей в Ташкенте и по всему Узбекистану. Цены в сумах.",
 };
@@ -25,7 +25,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <Header />
         <main className="flex-1">{children}</main>
         <footer className="border-t border-slate-200 bg-white py-6 text-center text-sm text-slate-400">
-          Mashina · тестовая версия, объявления ненастоящие
+          Mashina Bashina · тестовая версия, объявления взяты из Instagram
         </footer>
       </body>
     </html>
