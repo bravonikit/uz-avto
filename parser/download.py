@@ -23,6 +23,7 @@ from pathlib import Path
 
 import requests
 
+import ig_api
 from accounts import PARSER_DIR, account_dir, load_accounts
 from state import load_state, save_state
 
@@ -38,6 +39,22 @@ START_DATE = "2026-09-01T00:00:00Z"  # посты старше этой даты
 # Номера сообщений в выводе gallery-dl -j
 MSG_ERROR = -1
 MSG_URL = 3  # один файл поста (у карусели их несколько)
+
+# Instagram не принял вход (куки устарели или не прочитались). Дальше качать бессмысленно:
+# все аккаунты упадут так же, а лишние запросы без входа только привлекают внимание.
+AUTH_ERROR_WORDS = ("401", "unauthorized", "login", "checkpoint", "challenge")
+AUTH_STATUS = "нет входа в Instagram"
+MAX_AUTH_ERRORS = 3  # столько аккаунтов подряд без входа, и прогон останавливается
+EXIT_NO_LOGIN = 2
+
+# Если в .env есть токен (python ig_api.py setup), посты берём через официальный API,
+# иначе по-старому через gallery-dl и вход из Safari
+USE_API = ig_api.is_configured()
+if USE_API:
+    ACCOUNT_DELAY = (1, 2)  # официальному API длинные паузы не нужны
+    MAX_ACCOUNTS_PER_RUN = 150  # лимит API 200 запросов в час, один аккаунт = один запрос
+    AUTH_STATUS = "API не отвечает (токен или лимит)"
+    MAX_AUTH_ERRORS = 1
 
 
 def now_iso() -> str:
@@ -66,6 +83,16 @@ def fetch_metadata(account: str) -> tuple[list | None, str]:
         return None, error.splitlines()[-1][:200]
 
 
+def fetch_posts(account: str) -> tuple[list[dict], str, bool]:
+    """Посты аккаунта из API или gallery-dl: (посты, текст ошибки, это проблема входа?)."""
+    if USE_API:
+        print(f"  Запрашиваю {POSTS_LIMIT} последних постов через API...")
+        return ig_api.fetch_posts(account, POSTS_LIMIT)
+    messages, error = fetch_metadata(account)
+    posts = collect_posts(messages, account) if messages is not None else []
+    return posts, error, not posts and is_auth_error(messages, error)
+
+
 def post_type(file: dict) -> str:
     if file.get("type") == "reel":
         return "reel"
@@ -77,6 +104,15 @@ def post_type(file: dict) -> str:
 def to_iso(date: str) -> str:
     # gallery-dl отдаёт время UTC в виде "2026-11-09 11:00:37"
     return datetime.fromisoformat(date).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def is_auth_error(messages: list | None, error: str) -> bool:
+    """Похоже ли, что Instagram отказал из-за входа, а не из-за самого аккаунта."""
+    texts = [error]
+    for message in messages or []:
+        if message[0] == MSG_ERROR:
+            texts.append(str(message[1].get("message", "")))
+    return any(word in text.lower() for text in texts for word in AUTH_ERROR_WORDS)
 
 
 def collect_posts(messages: list, account: str) -> list[dict]:
@@ -147,12 +183,22 @@ def download_account(account: str, state: dict) -> None:
     images_dir = folder / "images"
     output_file = folder / "raw_posts.json"
     record = state.setdefault(account, {})
+    previous_run = record.get("last_run")
     record["last_run"] = now_iso()
 
-    messages, error = fetch_metadata(account)
-    posts = collect_posts(messages, account) if messages is not None else []
+    posts, error, auth_error = fetch_posts(account)
+    if auth_error:
+        # Аккаунт не виноват: возвращаем ему прежнее место в очереди
+        record["status"] = AUTH_STATUS
+        record["new_last_run"] = 0
+        if previous_run:
+            record["last_run"] = previous_run
+        else:
+            del record["last_run"]
+        print(f"  {AUTH_STATUS}" + (f": {error}" if USE_API else ""))
+        return
     if not posts:
-        record["status"] = f"ошибка: {error}" if messages is None else "постов не найдено"
+        record["status"] = f"ошибка: {error}" if error else "постов не найдено"
         record["new_last_run"] = 0
         print(f"  {record['status']}")
         return
@@ -163,6 +209,12 @@ def download_account(account: str, state: dict) -> None:
 
     images_dir.mkdir(parents=True, exist_ok=True)
     for post in fresh:
+        if not post["image"]:
+            # API не отдал картинку (рилс с закрытым скачиванием). Если она скачана раньше, оставляем её
+            old_image = f"data/{account}/images/{post['shortcode']}.jpg"
+            if (PARSER_DIR / old_image).exists():
+                post["image"] = old_image
+            continue
         try:
             if download_image(post["image_url"], PARSER_DIR / post["image"]):
                 time.sleep(random.uniform(*IMAGE_DELAY))
@@ -200,10 +252,14 @@ def main() -> None:
     accounts = load_accounts()
     if not accounts:
         sys.exit("Список аккаунтов пуст: впишите их в accounts.txt")
+    if USE_API:
+        ig_api.refresh_if_needed()
     state = load_state()
     todo = pick_accounts(accounts, state, explicit=len(sys.argv) > 1)
-    print(f"Аккаунтов в списке: {len(accounts)}, в этом запуске: {len(todo)}\n")
+    print(f"Аккаунтов в списке: {len(accounts)}, в этом запуске: {len(todo)}, "
+          f"источник: {'официальный API' if USE_API else 'gallery-dl'}\n")
 
+    done, auth_errors = [], 0
     for n, account in enumerate(todo, start=1):
         if n > 1:
             pause = random.uniform(*ACCOUNT_DELAY)
@@ -212,10 +268,19 @@ def main() -> None:
         print(f"[{n}/{len(todo)}] {account}")
         download_account(account, state)
         save_state(state)  # после каждого аккаунта, чтобы не потерять при Ctrl+C
+        done.append(account)
+        auth_errors = auth_errors + 1 if state[account]["status"] == AUTH_STATUS else 0
+        if auth_errors >= MAX_AUTH_ERRORS:
+            print(f"\nПрогон остановлен: {AUTH_STATUS} у {MAX_AUTH_ERRORS} аккаунтов подряд.")
+            if USE_API:
+                print("Проверьте токен: python ig_api.py status, при необходимости python ig_api.py setup")
+            else:
+                print("Откройте instagram.com в Safari, проверьте вход и запустите ./run_daily.sh ещё раз.")
+            sys.exit(EXIT_NO_LOGIN)
 
-    failed = [a for a in todo if state[a]["status"] != "ok"]
-    new_total = sum(state[a].get("new_last_run", 0) for a in todo)
-    print(f"\nГотово: {len(todo) - len(failed)} из {len(todo)} аккаунтов, новых постов: {new_total}")
+    failed = [a for a in done if state[a]["status"] != "ok"]
+    new_total = sum(state[a].get("new_last_run", 0) for a in done)
+    print(f"\nГотово: {len(done) - len(failed)} из {len(todo)} аккаунтов, новых постов: {new_total}")
     if failed:
         print("Не получилось: " + ", ".join(failed))
     left = len(accounts) - len(todo)

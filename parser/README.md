@@ -33,6 +33,20 @@ pip install -r requirements.txt
 > Конфиденциальность и безопасность → Полный доступ к диску → включите
 > для приложения терминала (Terminal или VS Code).
 
+## Официальный API вместо входа через Safari
+
+Если в `.env` есть токен, `download.py` берёт посты через официальный API Meta
+(Business Discovery), а не через gallery-dl. Настройка один раз:
+
+```bash
+python ig_api.py setup                    # спросит App ID, App Secret и токен
+python ig_api.py test auto_sale_abdulloh  # проверка на одном аккаунте
+python ig_api.py status                   # сколько дней осталось у токена
+```
+
+Токен живёт 60 дней и продлевается сам во время прогона. API видит только бизнес
+и авторские аккаунты. Чтобы вернуться к gallery-dl, сотрите `IG_ACCESS_TOKEN` в `.env`.
+
 ## Какие аккаунты парсим
 
 Список в `accounts.txt`, по одному на строку (без @). Строки с `#` пропускаются:
