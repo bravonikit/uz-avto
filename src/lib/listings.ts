@@ -37,9 +37,9 @@ export type Listing = {
 
 const INSTAGRAM_LISTINGS: Listing[] = instagramPosts.map((post) => ({
   id: post.id,
-  brand: post.brand,
-  model: post.model,
-  title: post.title,
+  brand: post.brand ?? "",
+  model: post.model ?? "",
+  title: post.title ?? undefined,
   year: post.year ?? undefined,
   price: post.price,
   currency: "USD",
@@ -66,7 +66,10 @@ export function priceInSum(listing: Listing) {
 export function getBrandModels(): Record<string, string[]> {
   const result: Record<string, Set<string>> = {};
   const add = (brand: string, model: string) => (result[brand] ??= new Set()).add(model);
-  for (const car of LISTINGS) add(car.brand, car.model);
+  for (const car of LISTINGS) {
+    // У части постов марку или модель определить нельзя: в фильтр их не добавляем
+    if (car.brand && car.model) add(car.brand, car.model);
+  }
 
   return Object.fromEntries(
     Object.keys(result)

@@ -16,6 +16,10 @@ from accounts import PARSER_DIR, account_dir, load_accounts
 SITE_DIR = PARSER_DIR.parent
 OUTPUT_FILE = SITE_DIR / "src" / "data" / "instagram-listings.json"
 SITE_IMAGES_DIR = SITE_DIR / "public" / "ig"
+# Разбор постов языковой моделью: {shortcode: {brand, model, year, mileage_km, is_sold, is_listing, note}}.
+# Если пост там есть, его поля важнее регулярок ниже. Постов, которых там нет, регулярки разбирают как раньше.
+LLM_PARSED_FILE = PARSER_DIR / "data" / "llm_parsed.json"
+OLDEST_YEAR, NEWEST_YEAR, MAX_MILEAGE_KM = 1990, 2027, 1_000_000
 
 # Первая строка проданных машин — это не название, пропускаем её
 SOLD_PATTERN = re.compile(r"baraka\s+boldi", re.IGNORECASE)
@@ -77,6 +81,8 @@ def find_title(text: str) -> tuple[str | None, bool]:
     lines = [TITLE_PREFIX.sub("", line).strip() for line in lines]
     lines = [line for line in lines if line and not NOT_TITLE.search(line)]
     if is_sold_any:
+        # Строка "BARAKA BOLDI" сама не название: берём первую строку после неё
+        lines = [line for line in lines if not SOLD_PATTERN.fullmatch(line)]
         return (lines[0] if lines else None), True
     is_sold = bool(lines) and bool(SOLD_PATTERN.fullmatch(lines[0]))
     if is_sold:
@@ -124,6 +130,35 @@ def find_mileage(text: str) -> int | None:
     return int(digits) if digits else None
 
 
+def load_llm_parsed() -> dict:
+    if not LLM_PARSED_FILE.exists():
+        return {}
+    return json.loads(LLM_PARSED_FILE.read_text(encoding="utf-8"))
+
+
+def apply_llm(listing: dict, parsed: dict | None) -> dict | None:
+    """Подставляет в объявление поля из разбора ЛЛМ. Возвращает None, если пост не объявление."""
+    if parsed is None:
+        return listing
+    if not parsed.get("is_listing", True):
+        return None
+    year, mileage = parsed.get("year"), parsed.get("mileage_km")
+    # Защита от выдумок: значения вне разумных границ не берём
+    if year is not None and not OLDEST_YEAR <= year <= NEWEST_YEAR:
+        year = None
+    if mileage is not None and not 0 <= mileage <= MAX_MILEAGE_KM:
+        mileage = None
+    brand, model = parsed.get("brand"), parsed.get("model")
+    listing.update(brand=brand, model=model, year=year, mileage_km=mileage, is_sold=bool(parsed.get("is_sold")))
+    # Название из поста оставляем, если в нём есть модель; иначе собираем "Марка Модель"
+    title = re.sub(r"^(?:модель|model)\s*:\s*", "", listing["title"] or "", flags=re.IGNORECASE)
+    listing["title"] = title or None
+    clean_name = " ".join(part for part in (brand, model) if part)
+    if clean_name and not (model and model.lower() in title.lower()):
+        listing["title"] = clean_name
+    return listing
+
+
 def copy_image(post: dict) -> str | None:
     """Копирует картинку в public/ig/ и возвращает её адрес на сайте."""
     if not post.get("image"):
@@ -135,7 +170,7 @@ def copy_image(post: dict) -> str | None:
     return f"/ig/{post['shortcode']}.jpg"
 
 
-def account_listings(account: str) -> list[dict]:
+def account_listings(account: str, llm_parsed: dict) -> list[dict]:
     """Объявления одного аккаунта (без анонсов и постов без цены)."""
     raw_file = account_dir(account) / "raw_posts.json"
     prices_file = account_dir(account) / "prices.json"
@@ -154,7 +189,7 @@ def account_listings(account: str) -> list[dict]:
         text = post["description"]
         title, is_sold = find_title(text)
         brand, model = split_title(title)
-        listings.append(
+        listing = apply_llm(
             {
                 "id": post["shortcode"],
                 "title": title,
@@ -170,8 +205,11 @@ def account_listings(account: str) -> list[dict]:
                 "source_url": post["url"],
                 "source_account": account,
                 "date": post["date"],
-            }
+            },
+            llm_parsed.get(post["shortcode"]),
         )
+        if listing is not None:
+            listings.append(listing)
     print(f"  {account}: {len(listings)} объявлений")
     return listings
 
@@ -180,9 +218,14 @@ def main() -> None:
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
     SITE_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
-    listings = []
+    llm_parsed = load_llm_parsed()
+    listings, seen = [], set()
     for account in load_accounts():
-        listings.extend(account_listings(account))
+        for listing in account_listings(account, llm_parsed):
+            # Совместные посты приходят от двух аккаунтов с одним shortcode: берём один раз
+            if listing["id"] not in seen:
+                seen.add(listing["id"])
+                listings.append(listing)
     # Свежие объявления первыми, вперемешку по аккаунтам
     listings.sort(key=lambda item: item["date"], reverse=True)
 
