@@ -4,10 +4,17 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { Freshness } from "@/components/Freshness";
 import { Gallery } from "@/components/Gallery";
 import { ListingPhoto } from "@/components/ListingPhoto";
 import { formatDate, formatMileage, formatPrice } from "@/lib/format";
-import { getAllListingIds, getListing, listingTitle, priceInSum } from "@/lib/listings";
+import {
+  countSellerListings,
+  getAllListingIds,
+  getListing,
+  listingTitle,
+  priceInSum,
+} from "@/lib/listings";
 
 // Заранее (при сборке) создаём страницы для всех объявлений —
 // так они открываются мгновенно.
@@ -46,23 +53,38 @@ export default async function ListingPage({ params }: PageProps<"/cars/[id]">) {
         <Link href="/cars" className="hover:text-slate-900">
           Объявления
         </Link>
-        {" / "}
-        <Link
-          href={`/cars?brand=${encodeURIComponent(listing.brand)}`}
-          className="hover:text-slate-900"
-        >
-          {listing.brand}
-        </Link>
-        {" / "}
-        <span className="text-slate-700">{listing.model}</span>
+        {/* Марку и модель показываем, только если их удалось определить */}
+        {listing.brand && (
+          <>
+            {" / "}
+            <Link
+              href={`/cars?brand=${encodeURIComponent(listing.brand)}`}
+              className="hover:text-slate-900"
+            >
+              {listing.brand}
+            </Link>
+          </>
+        )}
+        {listing.model && (
+          <>
+            {" / "}
+            <span className="text-slate-700">{listing.model}</span>
+          </>
+        )}
       </nav>
 
       <div className="grid gap-8 lg:grid-cols-[1fr_360px]">
         <div className="min-w-0">
           <h1 className="text-2xl font-bold sm:text-3xl">{listingTitle(listing)}</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Размещено {formatDate(listing.createdAt)} · № {listing.id}
+            Размещено {formatDate(listing.createdAt)} (<Freshness date={listing.createdAt} />) · №{" "}
+            {listing.id}
           </p>
+          {listing.isSold && (
+            <p className="mt-3 rounded-xl bg-slate-100 px-4 py-3 text-sm font-medium text-slate-700">
+              Продавец отметил, что машина продана. Объявление оставлено для истории цен.
+            </p>
+          )}
 
           <div className="mt-5">
             {listing.image ? (
@@ -100,7 +122,9 @@ export default async function ListingPage({ params }: PageProps<"/cars/[id]">) {
 
         <aside className="lg:sticky lg:top-20 lg:self-start">
           <div className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
-            <p className="text-3xl font-extrabold">{formatPrice(listing.price, listing.currency)}</p>
+            <p className={`text-3xl font-extrabold ${listing.isSold ? "text-slate-400 line-through" : ""}`}>
+              {formatPrice(listing.price, listing.currency)}
+            </p>
             {listing.currency === "USD" && (
               <p className="mt-1 text-sm text-slate-500">
                 ≈ {formatPrice(priceInSum(listing))} по тестовому курсу
@@ -142,6 +166,12 @@ export default async function ListingPage({ params }: PageProps<"/cars/[id]">) {
                 >
                   Открыть в Instagram ↗
                 </a>
+                <Link
+                  href={`/cars?seller=${encodeURIComponent(listing.source.account)}`}
+                  className="mt-2 block rounded-xl px-4 py-3 text-center text-sm font-semibold text-emerald-700 ring-1 ring-emerald-200 hover:bg-emerald-50"
+                >
+                  Все объявления продавца ({countSellerListings(listing.source.account)})
+                </Link>
               </>
             )}
 

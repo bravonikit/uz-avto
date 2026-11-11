@@ -25,6 +25,20 @@ export function formatDate(isoDate: string) {
   return dateFormat.format(new Date(isoDate));
 }
 
+// День по ташкентскому времени: "2026-11-11"
+const dayFormat = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tashkent" });
+
+// Сегодняшний пост → "сегодня", вчерашний → "вчера", до недели → "3 дня назад", старше → "8 ноября"
+export function formatFreshness(isoDate: string, now: Date = new Date()) {
+  const day = (date: Date) => Date.parse(dayFormat.format(date));
+  const daysAgo = Math.round((day(now) - day(new Date(isoDate))) / 86_400_000);
+  if (daysAgo <= 0) return "сегодня";
+  if (daysAgo === 1) return "вчера";
+  if (daysAgo <= 4) return `${daysAgo} дня назад`;
+  if (daysAgo <= 6) return `${daysAgo} дней назад`;
+  return formatDate(isoDate);
+}
+
 // "150 000 000" или "150000000" → 150000000. Пустая строка → undefined.
 export function parseNumber(value: unknown) {
   if (typeof value !== "string") return undefined;

@@ -32,6 +32,16 @@ async function Results({ searchParams }: Pick<PageProps<"/cars">, "searchParams"
         {/* key заставляет форму обновиться, если фильтры в адресе поменялись */}
         <SearchForm key={JSON.stringify(filters)} brands={getBrandModels()} initial={filters} />
       </div>
+      {filters.seller && (
+        <p className="mb-3 text-sm">
+          <span className="rounded-full bg-fuchsia-50 px-3 py-1 font-medium text-fuchsia-700 ring-1 ring-fuchsia-200">
+            Продавец @{filters.seller}
+          </span>
+          <Link href="/cars" className="ml-2 text-emerald-700 hover:underline">
+            показать всех
+          </Link>
+        </p>
+      )}
       <p className="mb-4 text-sm text-slate-500">Найдено объявлений: {listings.length}</p>
       {listings.length > 0 ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

@@ -23,6 +23,8 @@ export function SearchForm({ brands, initial = {} }: Props) {
   return (
     // <Form> отправляет поля в адрес страницы: /cars?brand=Kia&city=Ташкент
     <Form action="/cars" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Если смотрим машины одного продавца, фильтры его не сбрасывают */}
+      {initial.seller && <input type="hidden" name="seller" value={initial.seller} />}
       <select
         name="brand"
         value={brand}
@@ -100,9 +102,20 @@ export function SearchForm({ brands, initial = {} }: Props) {
         <option value="expensive">Сначала дорогие</option>
       </select>
 
+      <label className="flex items-center gap-2 px-1 text-sm text-slate-700">
+        <input
+          type="checkbox"
+          name="hideSold"
+          value="1"
+          defaultChecked={initial.hideSold}
+          className="size-4 accent-emerald-600"
+        />
+        Скрыть проданные
+      </label>
+
       <button
         type="submit"
-        className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 sm:col-span-2"
+        className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700"
       >
         Показать объявления
       </button>

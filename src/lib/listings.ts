@@ -32,6 +32,7 @@ export type Listing = {
   seller?: { name: string; phone: string; type: "Частное лицо" | "Автосалон" };
   image?: string; // настоящее фото: "/ig/DfhLAoxR1JB.jpg"
   source?: { account: string; url: string }; // откуда взято объявление
+  isSold?: boolean; // продавец пометил пост как проданный ("BARAKA BOLDI", "ПРОДАНО")
   createdAt: string;
 };
 
@@ -47,6 +48,7 @@ const INSTAGRAM_LISTINGS: Listing[] = instagramPosts.map((post) => ({
   description: post.description,
   image: post.image ?? undefined,
   source: { account: post.source_account, url: post.source_url },
+  isSold: post.is_sold,
   createdAt: post.date,
 }));
 
@@ -87,6 +89,8 @@ export type ListingFilters = {
   priceTo?: number;
   yearFrom?: number;
   yearTo?: number;
+  seller?: string; // Instagram-аккаунт продавца: /cars?seller=moshinasale
+  hideSold?: boolean; // не показывать проданные
   sort?: "new" | "cheap" | "expensive";
 };
 
@@ -107,6 +111,8 @@ export function filtersFromSearchParams(
     priceTo: parseNumber(params.priceTo),
     yearFrom: parseNumber(params.yearFrom),
     yearTo: parseNumber(params.yearTo),
+    seller: text("seller"),
+    hideSold: text("hideSold") === "1",
     sort: sort === "cheap" || sort === "expensive" ? sort : "new",
   };
 }
@@ -119,6 +125,8 @@ export function searchListings(filters: ListingFilters = {}): Listing[] {
       (!filters.brand || car.brand === filters.brand) &&
       (!filters.model || car.model === filters.model) &&
       (!filters.city || car.city === filters.city) &&
+      (!filters.seller || car.source?.account === filters.seller) &&
+      (!filters.hideSold || !car.isSold) &&
       (filters.priceFrom === undefined || priceInSum(car) >= filters.priceFrom) &&
       (filters.priceTo === undefined || priceInSum(car) <= filters.priceTo) &&
       (filters.yearFrom === undefined || (car.year !== undefined && car.year >= filters.yearFrom)) &&
@@ -130,6 +138,11 @@ export function searchListings(filters: ListingFilters = {}): Listing[] {
     if (filters.sort === "expensive") return priceInSum(b) - priceInSum(a);
     return b.createdAt.localeCompare(a.createdAt);
   });
+}
+
+// Сколько объявлений у продавца (для ссылки "Все объявления продавца")
+export function countSellerListings(account: string): number {
+  return LISTINGS.filter((car) => car.source?.account === account).length;
 }
 
 export function getListing(id: string): Listing | undefined {
