@@ -46,3 +46,10 @@ __pycache__/
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# данные из Instagram: чужие фото и объявления, в git не храним
+/public/ig/
+/src/data/instagram-listings.json
+
+# локальные настройки Claude
+.claude/

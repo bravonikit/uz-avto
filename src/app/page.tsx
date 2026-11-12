@@ -11,12 +11,13 @@ export default function HomePage() {
 
   return (
     <>
-      <section className="bg-gradient-to-br from-emerald-700 to-teal-900 px-4 py-12 sm:py-16">
+      {/* Шапка: зелёный сверху плавно переходит в фон страницы (у body он bg-slate-50) */}
+      <section className="bg-gradient-to-b from-emerald-700 via-emerald-500 via-45% to-slate-50 px-4 pt-12 pb-8 sm:pt-16">
         <div className="mx-auto max-w-6xl">
           <h1 className="text-3xl font-extrabold text-white sm:text-4xl">
             Купить авто в Узбекистане
           </h1>
-          <p className="mt-2 text-emerald-100">
+          <p className="mt-2 text-emerald-50">
             Тысячи машин от владельцев и автосалонов — от Ташкента до Нукуса
           </p>
           <div className="mt-6 rounded-2xl bg-white p-4 shadow-xl sm:p-5">
@@ -27,7 +28,7 @@ export default function HomePage() {
               <Link
                 key={brand}
                 href={`/cars?brand=${encodeURIComponent(brand)}`}
-                className="rounded-full bg-white/10 px-3 py-1 text-sm text-white ring-1 ring-white/20 hover:bg-white/20"
+                className="rounded-full bg-white/80 px-3 py-1 text-sm text-emerald-900 ring-1 ring-emerald-200 hover:bg-white"
               >
                 {brand}
               </Link>

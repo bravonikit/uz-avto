@@ -2,8 +2,9 @@
 
 const numberFormat = new Intl.NumberFormat("ru-RU");
 
-// 155000000 → "155 000 000 сум", 35200 в USD → "$35 200"
-export function formatPrice(amount: number, currency: "UZS" | "USD" = "UZS") {
+// 155000000 → "155 000 000 сум", 35200 в USD → "$35 200", нет цены → "Цена по запросу"
+export function formatPrice(amount: number | undefined, currency: "UZS" | "USD" = "UZS") {
+  if (amount === undefined) return "Цена по запросу";
   return currency === "USD"
     ? `$${numberFormat.format(amount)}`
     : `${numberFormat.format(amount)} сум`;

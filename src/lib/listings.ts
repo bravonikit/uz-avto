@@ -18,8 +18,9 @@ export type Listing = {
   model: string;
   title?: string; // полное название из поста: "Zeekr 001 WE 100kWh"
   year?: number;
-  price: number;
+  price?: number; // нет у объявлений «цена по запросу»
   currency: Currency;
+  downPayment?: number; // первый взнос в USD, если продавец указал рассрочку
   mileage?: number; // в километрах
   city?: string;
   bodyType?: (typeof BODY_TYPES)[number];
@@ -42,8 +43,9 @@ const INSTAGRAM_LISTINGS: Listing[] = instagramPosts.map((post) => ({
   model: post.model ?? "",
   title: post.title ?? undefined,
   year: post.year ?? undefined,
-  price: post.price,
+  price: post.price ?? undefined,
   currency: "USD",
+  downPayment: post.down_payment ?? undefined,
   mileage: post.mileage_km ?? undefined,
   description: post.description,
   image: post.image ?? undefined,
@@ -60,7 +62,9 @@ export function listingTitle(listing: Listing) {
   return listing.year ? `${name}, ${listing.year}` : name;
 }
 
+// Цена в сумах. undefined, если цена не указана («цена по запросу»).
 export function priceInSum(listing: Listing) {
+  if (listing.price === undefined) return undefined;
   return listing.currency === "USD" ? listing.price * USD_TO_UZS : listing.price;
 }
 
@@ -117,9 +121,11 @@ export function filtersFromSearchParams(
   };
 }
 
-// Цены сравниваются в сумах. Если задан фильтр по году,
-// объявления без года не показываются — их год неизвестен.
+// Цены сравниваются в сумах. Если задан фильтр по году или цене,
+// объявления без года или без цены не показываются — их значение неизвестно.
 export function searchListings(filters: ListingFilters = {}): Listing[] {
+  const priceAtLeast = (car: Listing, min: number) => (priceInSum(car) ?? -Infinity) >= min;
+  const priceAtMost = (car: Listing, max: number) => (priceInSum(car) ?? Infinity) <= max;
   const found = LISTINGS.filter(
     (car) =>
       (!filters.brand || car.brand === filters.brand) &&
@@ -127,15 +133,16 @@ export function searchListings(filters: ListingFilters = {}): Listing[] {
       (!filters.city || car.city === filters.city) &&
       (!filters.seller || car.source?.account === filters.seller) &&
       (!filters.hideSold || !car.isSold) &&
-      (filters.priceFrom === undefined || priceInSum(car) >= filters.priceFrom) &&
-      (filters.priceTo === undefined || priceInSum(car) <= filters.priceTo) &&
+      (filters.priceFrom === undefined || priceAtLeast(car, filters.priceFrom)) &&
+      (filters.priceTo === undefined || priceAtMost(car, filters.priceTo)) &&
       (filters.yearFrom === undefined || (car.year !== undefined && car.year >= filters.yearFrom)) &&
       (filters.yearTo === undefined || (car.year !== undefined && car.year <= filters.yearTo)),
   );
 
   return found.sort((a, b) => {
-    if (filters.sort === "cheap") return priceInSum(a) - priceInSum(b);
-    if (filters.sort === "expensive") return priceInSum(b) - priceInSum(a);
+    // При сортировке по цене объявления без цены идут в конце
+    if (filters.sort === "cheap") return (priceInSum(a) ?? Infinity) - (priceInSum(b) ?? Infinity);
+    if (filters.sort === "expensive") return (priceInSum(b) ?? -Infinity) - (priceInSum(a) ?? -Infinity);
     return b.createdAt.localeCompare(a.createdAt);
   });
 }

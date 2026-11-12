@@ -125,9 +125,17 @@ export default async function ListingPage({ params }: PageProps<"/cars/[id]">) {
             <p className={`text-3xl font-extrabold ${listing.isSold ? "text-slate-400 line-through" : ""}`}>
               {formatPrice(listing.price, listing.currency)}
             </p>
-            {listing.currency === "USD" && (
+            {listing.price !== undefined && listing.currency === "USD" && (
               <p className="mt-1 text-sm text-slate-500">
                 ≈ {formatPrice(priceInSum(listing))} по тестовому курсу
+              </p>
+            )}
+            {listing.price === undefined && (
+              <p className="mt-1 text-sm text-slate-500">Продавец не указал цену в посте, уточняйте у него.</p>
+            )}
+            {listing.downPayment !== undefined && (
+              <p className="mt-2 text-sm font-medium text-emerald-700">
+                В рассрочку, первый взнос от {formatPrice(listing.downPayment, "USD")}
               </p>
             )}
 

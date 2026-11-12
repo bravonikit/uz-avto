@@ -40,12 +40,17 @@ export function ListingCard({ listing }: { listing: Listing }) {
       <div className="flex flex-1 flex-col gap-1 p-4">
         <p className={`text-lg font-bold ${listing.isSold ? "text-slate-400 line-through" : "text-slate-900"}`}>
           {formatPrice(listing.price, listing.currency)}
-          {listing.currency === "USD" && (
+          {listing.price !== undefined && listing.currency === "USD" && (
             <span className="ml-2 text-xs font-normal text-slate-400">
               ≈ {formatPrice(priceInSum(listing))}
             </span>
           )}
         </p>
+        {listing.downPayment !== undefined && (
+          <p className="text-sm text-emerald-700">
+            В рассрочку, взнос от {formatPrice(listing.downPayment, "USD")}
+          </p>
+        )}
         <h3 className="font-medium text-slate-800 group-hover:text-emerald-700">
           {listingTitle(listing)}
         </h3>
