@@ -7,8 +7,12 @@
 Точка, запятая и пробел внутри числа разделяют тысячи. Валюта всегда USD.
 
 Не считаются ценой: первый взнос и платежи рассрочки, суммы в вонах, юанях и сумах,
-пробег (км), телефоны, числа меньше 1000.
-Пост без цены (анонс партии, обзор, «цена в директ») получает price = None.
+пробег (км), телефоны, числа меньше 1000, цена доп. опций и растаможки,
+цена в рассрочку без слова «цена» ("Насия: 79.900$").
+Пост без цены получает price = None. Если в нём при этом есть год, пробег или первый взнос,
+это похоже на объявление без цены (is_announcement = False): его разберёт ЛЛМ,
+и на сайте оно покажется как «Цена по запросу». Остальные посты без цены считаются анонсами.
+Первый взнос сохраняется отдельно в down_payment.
 
 Запуск: python extract_price.py  →  data/<аккаунт>/prices.json
         (все аккаунты из accounts.txt или только указанные: python extract_price.py имя)
@@ -29,7 +33,8 @@ NUM = r"(?<![\d.,])(\d{1,3}(?:[ .,'’]\d{3})+|\d{4,7})(?![\d]|[.,]\d)"
 NOT_USD = r"(?!\.?\s*(?:km|км|won|вон|yuan|юан|ml\b|mln|млн|million|so.?m|сум|ming|минг))"
 KEYWORD = r"(?:narx\w*|нарх\w*|цена|price|[сc]тоимост\w*|cip\b[^:\n]{0,20}:?)"
 CUR_SIGN = r"(?:\$|💰|💵|💲)"
-CUR_AFTER = r"\s*(?:\$|💰|💵|💲|y\.?\s?e\b|у\.?\s?е\b|usd|долл)"
+# Скобка перед знаком: "820ml(68500) $"
+CUR_AFTER = r"\s*\)?\s*(?:\$|💰|💵|💲|y\.?\s?e\b|у\.?\s?е\b|usd|долл)"
 
 PRICE_PATTERNS = [
     re.compile(KEYWORD + r"[^\d\n]{0,15}" + NUM + NOT_USD, re.IGNORECASE),  # Narxi: 19 500
@@ -42,6 +47,31 @@ SKIP_LINE = re.compile(
     r"boshlang|boshiga|nasiyaga|насияга|первоначальн|предоплат|взнос|to.?lov|тўлов|тулов|oyiga|ойига|ежемесяч|в месяц|bonus|бонус|kafolat|шин[аы]",
     re.IGNORECASE,
 )
+# Строки, где сумма обычно не цена машины: цена в рассрочку, доп. опции, растаможка, скидка.
+# Пропускаются, только если в строке нет слова «цена»: "Нархи 44.800$ насия бор" остаётся ценой.
+SOFT_SKIP_LINE = re.compile(
+    r"nasi?ya|nasia|насия|рассрочк|kredit|кредит|доп\.?\s*опци|опци\w*\s+на\b|растаможка\s*:|rastamojka\s*:|скидк|chegirma",
+    re.IGNORECASE,
+)
+HAS_KEYWORD = re.compile(KEYWORD, re.IGNORECASE)
+
+# Первый взнос: "Boshiga 19.000$", "Boshlang‘ich to‘lov: 4.000$", "Первоначальный взнос — 6800$"
+DOWN_LINE = re.compile(r"boshlang|boshiga|первоначальн|предоплат|взнос", re.IGNORECASE)
+DOWN_NUM = re.compile(r"(?<![\d.,])(\d{1,3}(?:[ .,'’]\d{3})+|\d{3,7})\s*\$|\$\s*(\d{1,3}(?:[ .,'’]\d{3})+|\d{3,7})(?!\d)")
+MIN_DOWN_PAYMENT = 100
+
+# Признаки объявления в посте без цены: год ("2023 yil", "Yili: 2025", просто "2022") или пробег
+CAR_DETAILS = re.compile(
+    r"(?<!\d)(?:199\d|20[0-2]\d)(?!\d)|\byili?\b|\bйил|год\b|probe[gk]|пробег|yurgan|юрган|masofa|\d\s*(?:km|км)\b",
+    re.IGNORECASE,
+)
+
+
+def skip_line(line: str) -> bool:
+    """Строка не про цену машины: взнос, платёж, опции, рассрочка."""
+    if SKIP_LINE.search(line):
+        return True
+    return bool(SOFT_SKIP_LINE.search(line)) and not HAS_KEYWORD.search(line)
 
 
 def to_number(raw: str) -> int:
@@ -52,7 +82,7 @@ def find_prices(text: str) -> list[int]:
     """Все разные цены из текста в USD, в порядке появления."""
     prices: list[int] = []
     for line in text.splitlines():
-        if SKIP_LINE.search(line):
+        if skip_line(line):
             continue
         for pattern in PRICE_PATTERNS:
             for match in pattern.finditer(line):
@@ -71,7 +101,7 @@ def main_price(text: str) -> int | None:
     """
     keyword_prices = []
     for line in text.splitlines():
-        if SKIP_LINE.search(line):
+        if skip_line(line):
             continue
         for match in PRICE_PATTERNS[0].finditer(line):
             price = to_number(match.group(1))
@@ -79,13 +109,34 @@ def main_price(text: str) -> int | None:
                 keyword_prices.append(price)
     if keyword_prices:
         return keyword_prices[0]
+    # Пост про рассрочку ("Boshiga 26.000$") без слова «цена»: оставшиеся суммы
+    # почти всегда цены опций, а не машины. Лучше «цена по запросу», чем неверная цена.
+    if find_down_payment(text) is not None:
+        return None
     prices = find_prices(text)
     return min(prices) if prices else None
 
 
+def find_down_payment(text: str) -> int | None:
+    """Первый взнос в USD, если он указан."""
+    for line in text.splitlines():
+        if not DOWN_LINE.search(line):
+            continue
+        for match in DOWN_NUM.finditer(line):
+            amount = to_number(match.group(1) or match.group(2))
+            if MIN_DOWN_PAYMENT <= amount <= MAX_PRICE:
+                return amount
+    return None
+
+
+def looks_like_listing(text: str) -> bool:
+    """В посте есть год, пробег или первый взнос: похоже на объявление, даже если цены нет."""
+    return find_down_payment(text) is not None or bool(CAR_DETAILS.search(re.sub(r"#\S+", "", text)))
+
+
 def is_announcement(text: str) -> bool:
-    """Пост без цены: анонс партии, обзор, «цена в директ»."""
-    return not find_prices(text)
+    """Пост не объявление: нет ни цены, ни признаков машины (анонс партии, реклама, пустая подпись)."""
+    return main_price(text) is None and not looks_like_listing(text)
 
 
 EXAMPLES_WITHOUT_PRICE = 3  # сколько постов без цены показать по каждому аккаунту
@@ -102,15 +153,16 @@ def process_account(account: str) -> dict | None:
     results = []
     for post in posts:
         text = post["description"]
-        announcement = is_announcement(text)
-        prices = [] if announcement else find_prices(text)
+        price = main_price(text)
+        prices = find_prices(text) if price is not None else []
         results.append(
             {
                 "url": post["url"],
-                "price": main_price(text) if prices else None,
+                "price": price,
                 "all_prices": prices,
-                "currency": CURRENCY if prices else None,
-                "is_announcement": announcement,
+                "currency": CURRENCY if price is not None else None,
+                "down_payment": find_down_payment(text),
+                "is_announcement": is_announcement(text),
             }
         )
 
@@ -134,9 +186,12 @@ def process_account(account: str) -> dict | None:
 def main() -> None:
     stats = [s for s in (process_account(a) for a in load_accounts()) if s]
 
-    print(f"\n{'аккаунт':<30}{'постов':>8}{'с ценой':>9}{'без цены':>10}")
+    print(f"\n{'аккаунт':<30}{'постов':>8}{'с ценой':>9}{'без цены':>10}{'анонсы':>8}")
     for row in stats:
-        print(f"{row['account']:<30}{row['posts']:>8}{row['with_price']:>9}{row['announcements']:>10}")
+        print(
+            f"{row['account']:<30}{row['posts']:>8}{row['with_price']:>9}"
+            f"{row['without_price']:>10}{row['announcements']:>8}"
+        )
 
 
 if __name__ == "__main__":

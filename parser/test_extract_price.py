@@ -2,7 +2,7 @@
 
 import unittest
 
-from extract_price import find_prices, is_announcement, main_price
+from extract_price import find_down_payment, find_prices, is_announcement, main_price
 
 
 class FindPricesTest(unittest.TestCase):
@@ -101,6 +101,47 @@ class MainPriceTest(unittest.TestCase):
     def test_keyword_price_first(self):
         text = "💰 270 000 $ — без растаможки\nЦена: 345 000 $ с растаможкой"
         self.assertEqual(main_price(text), 345000)
+
+
+class NewFormatsTest(unittest.TestCase):
+    """Правила по разбору 12.11.2026."""
+
+    def test_price_in_brackets_before_dollar(self):
+        # savlat__010: сумма в сумах, потом доллары в скобках
+        self.assertEqual(main_price("💰 820ml(68500) $Narxi kelishiladi (naxt nasiya savdo, barter)"), 68500)
+        self.assertEqual(main_price("💰 647.00000Ml (54000) $Narxi kelishiladi"), 54000)
+
+    def test_installment_price_is_not_price(self):
+        # avto.archa: цена в рассрочку, обычной цены в посте нет
+        self.assertIsNone(main_price("BMW X7 xDrive M50i\nГод выпуска: 2019\nНасия: 79.900$"))
+        self.assertIsNone(main_price("KIA SELTOS\n▪️Nasia savdoga 7,800$ bilan chiqadi"))
+
+    def test_price_with_installment_note_stays(self):
+        self.assertEqual(main_price("▪️Нархи 44.800$ насия бор"), 44800)
+
+    def test_option_prices_are_not_car_price(self):
+        # faqat_nasiya_, BMW i5: в посте только цены опций и первый взнос
+        text = "BMW i5 50L\n- Доп опции (14.400):\nM-пакет - 1.500$\nдиски + резина R20 - 3.500$\n\nBoshiga 26.000$"
+        self.assertIsNone(main_price(text))
+        self.assertEqual(find_down_payment(text), 26000)
+
+    def test_customs_is_not_price(self):
+        text = "520 CATL — $17500\n700 LiDAR — $20300\n(Растаможка: примерно $7100)"
+        self.assertEqual(main_price(text), 17500)
+
+    def test_down_payment(self):
+        self.assertEqual(find_down_payment("💰 Boshlang‘ich to‘lov: 4.000$"), 4000)
+        self.assertEqual(find_down_payment("🔹 Boshiga 300$"), 300)
+        self.assertEqual(find_down_payment("Первоначальный взнос — 110'000$."), 110000)
+        self.assertIsNone(find_down_payment("Boshlang’ich To’lo’v yo’q🔥0$🔥"))
+        self.assertIsNone(find_down_payment("Narxi: 15.000$"))
+
+    def test_listing_without_price_is_not_announcement(self):
+        self.assertFalse(is_announcement("G500 2023 yil Brabus\n☎️. 983070707"))
+        self.assertFalse(is_announcement("Genesis G90 2022 🔥\n72.000 km\n99-747-47-41"))
+        self.assertFalse(is_announcement("Hongqi H9\nBoshiga 19.000$"))
+        self.assertTrue(is_announcement("MOSHINA OLAMIZ VA SOTAMIZ\n90-317-27-78"))
+        self.assertTrue(is_announcement(""))
 
 
 if __name__ == "__main__":

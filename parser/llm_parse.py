@@ -29,7 +29,11 @@ def load_parsed() -> dict:
 
 
 def posts_with_price() -> dict[str, dict]:
-    """Все посты с ценой (те, что попадают на сайт): {shortcode: пост}."""
+    """Все посты, которые могут попасть на сайт: {shortcode: пост}.
+
+    Это посты с ценой и посты без цены, похожие на объявление (год, пробег, первый взнос).
+    Вторые попадают на сайт только после разбора: ЛЛМ решает, объявление это или нет.
+    """
     result = {}
     for account in load_accounts_from_file():
         raw_file = account_dir(account) / "raw_posts.json"
@@ -39,7 +43,7 @@ def posts_with_price() -> dict[str, dict]:
         prices = {item["url"]: item for item in json.loads(prices_file.read_text(encoding="utf-8"))}
         for post in json.loads(raw_file.read_text(encoding="utf-8")):
             price = prices.get(post["url"])
-            if price and not price["is_announcement"] and price["price"] is not None:
+            if price and not price["is_announcement"]:
                 result.setdefault(post["shortcode"], post)
     return result
 
