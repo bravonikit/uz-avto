@@ -74,6 +74,13 @@ def load_channels() -> list[tuple[str, str | None]]:
         channel = parts[0].rstrip("/").split("/")[-1].lstrip("@")
         if channel.lower() not in {name.lower() for name, _ in pairs}:
             pairs.append((channel, parts[1].lower() if len(parts) > 1 else None))
+    # Продавец попросил убрать его объявления (status = opted_out в data/sellers/sellers.csv): канал не качаем
+    try:
+        from sellers import SellerIndex
+        index = SellerIndex()
+        pairs = [pair for pair in pairs if not index.find("telegram", pair[0], "")["opted_out"]]
+    except FileNotFoundError:
+        pass
     wanted = {name.lower() for name in sys.argv[1:]}
     if wanted:
         pairs = [pair for pair in pairs if pair[0].lower() in wanted]

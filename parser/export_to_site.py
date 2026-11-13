@@ -19,6 +19,8 @@ from datetime import datetime
 from statistics import median
 
 from accounts import PARSER_DIR, account_dir, load_accounts
+from market import add_market
+from sellers import SellerIndex
 
 SITE_DIR = PARSER_DIR.parent
 OUTPUT_FILE = SITE_DIR / "src" / "data" / "instagram-listings.json"
@@ -27,6 +29,10 @@ TG_LISTINGS_FILE = PARSER_DIR / "data" / "_tg" / "listings.json"
 TG_ACCOUNTS_FILE = PARSER_DIR / "tg_accounts.txt"
 SITE_TG_IMAGES_DIR = SITE_DIR / "public" / "tg"
 CROSS_POST_DAYS = 45  # один продавец, Instagram и Telegram: посты про одну машину не дальше друг от друга
+ONLY_CITY = "Ташкент"  # пока работаем с одним городом: объявления с другим городом в тексте не выгружаем
+CROSS_SELLER_DAYS = 60  # разные продавцы: посты про одну машину не дальше друг от друга
+# Пары «похоже на одну машину у разных продавцов», которые автоматом не склеены: для ручной проверки
+CROSS_SELLER_CANDIDATES_FILE = PARSER_DIR / "data" / "cross_seller_candidates.json"
 # Разбор постов языковой моделью: {shortcode: {brand, model, year, mileage_km, is_sold, is_listing, note}}.
 # Если пост там есть, его поля важнее регулярок ниже. Постов, которых там нет, регулярки разбирают как раньше.
 LLM_PARSED_FILE = PARSER_DIR / "data" / "llm_parsed.json"
@@ -285,6 +291,7 @@ def telegram_listings() -> list[dict]:
             "id", "title", "brand", "model", "year", "mileage_km", "price", "currency", "down_payment",
             "description", "is_sold", "source_url", "source_account", "date", *EXTRA_FIELDS, "duplicate_ids", "price_history",
         )}
+        listing["first_posted"] = item.get("first_posted") or item["date"]
         listing["image"] = image
         listing["source"] = "telegram"
         listing["also_at"] = []
@@ -342,6 +349,88 @@ def merge_across_sources(instagram: list[dict], telegram: list[dict]) -> tuple[l
                         item[key] = other[key]
     rest = [item for item in instagram if item["id"] not in merged_ids]
     return sorted(rest + telegram, key=lambda item: item["date"], reverse=True), len(merged_ids)
+
+
+# Продавец, город и дубли между разными продавцами
+
+def add_sellers(listings: list[dict]) -> tuple[list[dict], int, int]:
+    """Ставит на каждое объявление продавца и город, убирает объявления отказников.
+
+    Город берётся из текста поста, а если его там нет, то из таблицы продавцов (city_source = "seller").
+    Объявления, где в тексте назван другой город (не ONLY_CITY), не выгружаем.
+    Возвращает (объявления, сколько убрано по отказу, сколько убрано из-за другого города).
+    """
+    index = SellerIndex()
+    kept, dropped, other_city = [], 0, 0
+    for item in listings:
+        seller = index.find(item["source"], item["source_account"], item["description"])
+        if seller["opted_out"]:
+            dropped += 1
+            continue
+        if item["city"] and item["city"] != ONLY_CITY:
+            other_city += 1
+            continue
+        item.update(seller_id=seller["seller_id"], seller_kind=seller["seller_kind"], posted_by=seller["posted_by"],
+                    phones=seller["phones"])
+        item["city_source"] = "text" if item["city"] else None
+        if not item["city"] and seller["seller_city"] and seller["seller_kind"] != "private":
+            item["city"], item["city_source"] = seller["seller_city"], "seller"
+        item.setdefault("first_posted", item["date"])
+        kept.append(item)
+    return kept, dropped, other_city
+
+
+def merge_across_sellers(listings: list[dict]) -> tuple[list[dict], int, list[dict]]:
+    """Одна машина у разных продавцов (чаще всего агрегатор перепечатал чужое объявление).
+
+    Кандидаты: совпали марка, модель, год и пробег (не нулевой), посты не дальше CROSS_SELLER_DAYS дней.
+    Склеиваем сами, только если есть подтверждение: общий телефон в постах, одинаковый текст
+    или это один и тот же продавец (его пост и перепечатка у агрегатора).
+    Остальные пары уходят в список для ручной проверки и на сайте остаются отдельными карточками.
+    Возвращает (объявления, сколько карточек убрано, непроверенные пары).
+    """
+    groups: dict[tuple, list[dict]] = {}
+    for item in listings:
+        if item["brand"] and item["model"] and item["year"] and item["mileage_km"]:
+            groups.setdefault((item["brand"].lower(), item["model"].lower(), item["year"], item["mileage_km"]), []).append(item)
+    removed_ids, candidates = set(), []
+    for group in groups.values():
+        if len({item["source_account"] for item in group}) < 2:
+            continue
+        # Своё объявление продавца важнее перепечатки агрегатора, дальше более раннее
+        group.sort(key=lambda item: (item["seller_id"] != item["posted_by"], item["first_posted"]))
+        for index, main in enumerate(group):
+            if main["id"] in removed_ids:
+                continue
+            for other in group[index + 1:]:
+                if other["id"] in removed_ids or other["source_account"] == main["source_account"]:
+                    continue
+                if hours_between(main, other) > CROSS_SELLER_DAYS * 24:
+                    continue
+                same_phone = bool(set(main["phones"]) & set(other["phones"]))
+                first, second = text_key(main["description"])[:80], text_key(other["description"])[:80]
+                same_text = len(first) >= 30 and first == second
+                # Агрегатор перепечатал машину продавца, которого мы знаем по телефону
+                same_seller = main["seller_id"] == other["seller_id"]
+                if not (same_phone or same_text or same_seller):
+                    candidates.append({
+                        "car": f"{main['brand']} {main['model']} {main['year']}, {main['mileage_km']} км",
+                        "first": {"id": main["id"], "account": main["source_account"], "price": main["price"], "url": main["source_url"]},
+                        "second": {"id": other["id"], "account": other["source_account"], "price": other["price"], "url": other["source_url"]},
+                    })
+                    continue
+                removed_ids.add(other["id"])
+                main["duplicate_ids"] = main["duplicate_ids"] + [other["id"]] + other["duplicate_ids"]
+                main["also_at"] = main["also_at"] + other["also_at"] + [{
+                    "source": other["source"], "account": other["source_account"], "url": other["source_url"], "price": other["price"],
+                }]
+                main["is_sold"] = main["is_sold"] or other["is_sold"]
+                main["first_posted"] = min(main["first_posted"], other["first_posted"])
+                for key in ("price", "currency", "down_payment", "image"):
+                    if main[key] is None:
+                        main[key] = other[key]
+    CROSS_SELLER_CANDIDATES_FILE.write_text(json.dumps(candidates, ensure_ascii=False, indent=1), encoding="utf-8")
+    return [item for item in listings if item["id"] not in removed_ids], len(removed_ids), candidates
 
 
 def load_price_overrides() -> dict:
@@ -490,7 +579,10 @@ def main() -> None:
     instagram_count = len(listings)
     telegram = telegram_listings()
     listings, cross_duplicates = merge_across_sources(listings, telegram)
+    listings, opted_out, other_city = add_sellers(listings)
+    listings, seller_duplicates, candidates = merge_across_sellers(listings)
     suspects = hide_suspect_prices(listings)
+    market = add_market(listings)
 
     OUTPUT_FILE.write_text(json.dumps(listings, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -500,6 +592,12 @@ def main() -> None:
     print(f"\nВыгружено объявлений: {len(listings)} → {OUTPUT_FILE.relative_to(SITE_DIR)}")
     print(f"  Instagram: {instagram_count}, Telegram: {len(telegram)}, одна машина на обеих площадках: {cross_duplicates}")
     print(f"  убрано дублей внутри аккаунтов Instagram: {duplicates}")
+    print(f"  одна машина у разных продавцов: склеено {seller_duplicates}, на ручную проверку {len(candidates)} пар "
+          f"(data/{CROSS_SELLER_CANDIDATES_FILE.name}); убрано по отказу продавца: {opted_out}, из-за другого города: {other_city}")
+    print(f"  оценка цены: {market['priced']} машин (ниже рынка {market['labels']['below']}, в рынке {market['labels']['fair']}, "
+          f"выше {market['labels']['above']}, слишком далеко от рынка {market['labels']['check']}), "
+          f"типичное отклонение от медианы {market['median_error']:.0%}; "
+          f"с ликвидностью: {market['with_liquidity']} (по модели {market['liquidity_by_model']}, остальные по марке)")
     print(f"  с годом: {count('year')}, с пробегом: {count('mileage_km')}, с фото: {count('image')}")
     print(f"  с ценой: {count('price')}, цена по запросу: {len(listings) - count('price')}")
     print(f"  не в наличии (под заказ, CIP, без растаможки): {count('price_type')}, с топливом: {count('fuel')}, "

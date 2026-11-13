@@ -113,6 +113,40 @@ def telegram_texts(channel: str) -> list[str]:
     return [post["text"] for post in json.loads(path.read_text(encoding="utf-8")).values() if post["text"]]
 
 
+class SellerIndex:
+    """Кто продавец объявления: по аккаунту или каналу, а у агрегаторов по телефону в посте."""
+
+    def __init__(self) -> None:
+        self.sellers = {row["seller_id"]: row for row in read_csv(SELLERS_FILE)}
+        sources = read_csv(SOURCES_FILE)
+        self.by_account = {(row["platform"], row["handle"].lower()): row["seller_id"] for row in sources}
+        self.by_phone = {row["handle"]: row["seller_id"] for row in sources if row["platform"] == "phone"}
+
+    def find(self, platform: str, account: str, text: str) -> dict:
+        """Поля продавца для объявления.
+
+        seller_id: номер из sellers.csv. У поста агрегатора это продавец с телефоном из поста,
+        а если такого телефона в таблице нет, то "phone:998..." (частник, которого мы ещё не знаем).
+        posted_by: кто выложил пост (сам продавец или агрегатор).
+        """
+        phones = sorted(find_phones(text))
+        owner_id = self.by_account.get((platform, account.lower()))
+        owner = self.sellers.get(owner_id, {})
+        seller_id, seller = owner_id, owner
+        if owner.get("kind") == "aggregator" and phones:
+            known = next((self.by_phone[phone] for phone in phones if phone in self.by_phone), None)
+            seller_id = known or f"phone:{phones[0]}"
+            seller = self.sellers.get(known, {}) if known else {}
+        return {
+            "seller_id": seller_id,
+            "seller_kind": "private" if str(seller_id).startswith("phone:") else seller.get("kind"),
+            "posted_by": owner_id,
+            "phones": phones,
+            "opted_out": "opted_out" in (owner.get("status"), seller.get("status")),
+            "seller_city": seller.get("city") or owner.get("city") or None,
+        }
+
+
 def build() -> None:
     sellers, sources = read_csv(SELLERS_FILE), read_csv(SOURCES_FILE)
     known = {(row["platform"], row["handle"].lower()): row["seller_id"] for row in sources}
