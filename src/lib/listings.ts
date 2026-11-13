@@ -1,4 +1,4 @@
-// Объявления, выгруженные из Instagram (parser/export_to_site.py).
+// Объявления, выгруженные из Instagram и Telegram (parser/export_to_site.py).
 // Позже этот файл заменится запросами к базе данных,
 // а остальной код почти не изменится: страницы зовут только функции ниже.
 
@@ -8,7 +8,30 @@ import { parseNumber } from "./format";
 
 export type Currency = "UZS" | "USD";
 
+// Площадка, с которой взято объявление
+export type SourcePlatform = "instagram" | "telegram";
+
+export const SOURCE_LABELS: Record<SourcePlatform, string> = {
+  instagram: "Instagram",
+  telegram: "Telegram",
+};
+
+// Цена не за машину в наличии: под заказ, с доставкой до Ташкента (CIP) или без растаможки
+export type PriceType = "order" | "cip" | "no_customs";
+
+export const PRICE_TYPE_LABELS: Record<PriceType, string> = {
+  order: "Под заказ",
+  cip: "Под заказ, CIP Ташкент",
+  no_customs: "Без растаможки",
+};
+
+const FUELS: readonly string[] = ["Бензин", "Газ/бензин", "Дизель", "Гибрид", "Электро"];
+
 // Тестовый курс, чтобы фильтр по цене в сумах работал и для цен в долларах
+export const MARKET_LABELS = { below: "Ниже рынка", fair: "Цена в рынке", above: "Выше рынка" } as const;
+export const MARKET_COLORS = { below: "text-emerald-700", fair: "text-slate-500", above: "text-rose-600" } as const;
+export const LIQUIDITY_LABELS = { high: "Продаётся быстро", medium: "Продаётся средне", low: "Продаётся медленно" } as const;
+
 export const USD_TO_UZS = 12_500;
 
 // Поля со знаком «?» есть не у всех объявлений (например, у Instagram нет города).
@@ -21,6 +44,8 @@ export type Listing = {
   price?: number; // нет у объявлений «цена по запросу»
   currency: Currency;
   downPayment?: number; // первый взнос в USD, если продавец указал рассрочку
+  priceType?: PriceType; // не указано = машина в наличии, цена полная
+  interiorColor?: string; // цвет салона, если продавец его написал
   mileage?: number; // в километрах
   city?: string;
   bodyType?: (typeof BODY_TYPES)[number];
@@ -32,7 +57,11 @@ export type Listing = {
   description: string;
   seller?: { name: string; phone: string; type: "Частное лицо" | "Автосалон" };
   image?: string; // настоящее фото: "/ig/DfhLAoxR1JB.jpg"
-  source?: { account: string; url: string }; // откуда взято объявление
+  source?: { account: string; url: string; platform: SourcePlatform }; // откуда взято объявление
+  // Оценка по похожим машинам на сайте (считает parser/market.py)
+  market?: { price: number; low: number; high: number; count: number; label: "below" | "fair" | "above" };
+  liquidity?: "high" | "medium" | "low"; // как быстро продаётся эта модель, по отметкам «продано»
+  alsoAt?: { account: string; url: string; price?: number }[]; // эта же машина в других каналах
   isSold?: boolean; // продавец пометил пост как проданный ("BARAKA BOLDI", "ПРОДАНО")
   createdAt: string;
 };
@@ -46,10 +75,33 @@ const INSTAGRAM_LISTINGS: Listing[] = instagramPosts.map((post) => ({
   price: post.price ?? undefined,
   currency: "USD",
   downPayment: post.down_payment ?? undefined,
+  priceType: (post.price_type as PriceType | null) ?? undefined,
+  fuel: FUELS.includes(post.fuel ?? "") ? (post.fuel as Listing["fuel"]) : undefined,
+  color: post.body_color ? { name: post.body_color, hex: post.body_color_hex ?? "#9ca3af" } : undefined,
+  interiorColor: post.interior_color ?? undefined,
+  city: post.city ?? undefined,
+  market:
+    post.market_price !== null && post.price_label !== null && post.price_label !== "check"
+      ? {
+          price: post.market_price,
+          low: post.market_low ?? post.market_price,
+          high: post.market_high ?? post.market_price,
+          count: post.market_n ?? 0,
+          label: post.price_label as "below" | "fair" | "above",
+        }
+      : undefined,
+  liquidity: post.liquidity_level === "model" ? (post.liquidity_label as "high" | "medium" | "low") : undefined,
+  alsoAt: (post.also_at as { account: string; url: string; price?: number | null }[])
+    .filter((place) => place.account !== post.source_account)
+    .map((place) => ({ account: place.account, url: place.url, price: place.price ?? undefined })),
   mileage: post.mileage_km ?? undefined,
   description: post.description,
   image: post.image ?? undefined,
-  source: { account: post.source_account, url: post.source_url },
+  source: {
+    account: post.source_account,
+    url: post.source_url,
+    platform: post.source === "telegram" ? "telegram" : "instagram",
+  },
   isSold: post.is_sold,
   createdAt: post.date,
 }));
@@ -83,6 +135,21 @@ export function getBrandModels(): Record<string, string[]> {
       .map((brand) => [brand, [...result[brand]].sort((a, b) => a.localeCompare(b))]),
   );
 }
+
+// Популярные марки для главной: у кого больше minCount машин в продаже,
+// от самых частых к редким. Если таких мало, берём первые atLeast марок.
+export function getPopularBrands(minCount = 20, atLeast = 10): string[] {
+  const counts: Record<string, number> = {};
+  for (const car of LISTINGS) {
+    if (car.brand && !car.isSold) counts[car.brand] = (counts[car.brand] ?? 0) + 1;
+  }
+  const sorted = Object.keys(counts).sort((a, b) => counts[b] - counts[a] || a.localeCompare(b));
+  const popular = sorted.filter((brand) => counts[brand] > minCount);
+  return popular.length >= atLeast ? popular : sorted.slice(0, atLeast);
+}
+
+// Сколько карточек показываем на одной странице ленты
+export const PAGE_SIZE = 24;
 
 // Что может прийти из поисковой формы (все поля необязательные).
 export type ListingFilters = {
@@ -140,6 +207,8 @@ export function searchListings(filters: ListingFilters = {}): Listing[] {
   );
 
   return found.sort((a, b) => {
+    // Проданные всегда в конце списка, при любой сортировке
+    if (Boolean(a.isSold) !== Boolean(b.isSold)) return a.isSold ? 1 : -1;
     // При сортировке по цене объявления без цены идут в конце
     if (filters.sort === "cheap") return (priceInSum(a) ?? Infinity) - (priceInSum(b) ?? Infinity);
     if (filters.sort === "expensive") return (priceInSum(b) ?? -Infinity) - (priceInSum(a) ?? -Infinity);
@@ -147,9 +216,44 @@ export function searchListings(filters: ListingFilters = {}): Listing[] {
   });
 }
 
+// Сколько машин сейчас в продаже (проданные не считаем)
+export function countActiveListings(): number {
+  return LISTINGS.filter((car) => !car.isSold).length;
+}
+
 // Сколько объявлений у продавца (для ссылки "Все объявления продавца")
 export function countSellerListings(account: string): number {
   return LISTINGS.filter((car) => car.source?.account === account).length;
+}
+
+// Похожие объявления: та же марка и модель, год не дальше SIMILAR_YEARS, ближе по году и пробегу идут первыми.
+// Проданные не показываем. Машины под заказ показываем только к машине под заказ.
+const SIMILAR_YEARS = 2;
+const SIMILAR_KM_PER_YEAR = 30_000; // разница в год весит как 30 000 км пробега
+
+export function getSimilarListings(listing: Listing, limit = 4): Listing[] {
+  if (!listing.brand || !listing.model) return [];
+  const brand = listing.brand.toLowerCase();
+  const model = listing.model.toLowerCase();
+  const distance = (car: Listing) => {
+    const years = listing.year !== undefined && car.year !== undefined ? Math.abs(car.year - listing.year) : SIMILAR_YEARS;
+    const km =
+      listing.mileage !== undefined && car.mileage !== undefined
+        ? Math.abs(car.mileage - listing.mileage)
+        : SIMILAR_KM_PER_YEAR;
+    return years * SIMILAR_KM_PER_YEAR + km;
+  };
+  return LISTINGS.filter(
+    (car) =>
+      car.id !== listing.id &&
+      !car.isSold &&
+      car.brand.toLowerCase() === brand &&
+      car.model.toLowerCase() === model &&
+      Boolean(car.priceType) === Boolean(listing.priceType) &&
+      (listing.year === undefined || car.year === undefined || Math.abs(car.year - listing.year) <= SIMILAR_YEARS),
+  )
+    .sort((a, b) => distance(a) - distance(b))
+    .slice(0, limit);
 }
 
 export function getListing(id: string): Listing | undefined {

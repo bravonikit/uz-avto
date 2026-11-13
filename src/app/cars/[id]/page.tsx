@@ -3,17 +3,25 @@
 
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { Freshness } from "@/components/Freshness";
 import { Gallery } from "@/components/Gallery";
+import { ListingCard } from "@/components/ListingCard";
 import { ListingPhoto } from "@/components/ListingPhoto";
 import { formatDate, formatMileage, formatPrice } from "@/lib/format";
 import {
   countSellerListings,
   getAllListingIds,
   getListing,
+  getSimilarListings,
   listingTitle,
   priceInSum,
+  LIQUIDITY_LABELS,
+  MARKET_COLORS,
+  MARKET_LABELS,
+  PRICE_TYPE_LABELS,
+  SOURCE_LABELS,
 } from "@/lib/listings";
 
 // Заранее (при сборке) создаём страницы для всех объявлений —
@@ -28,9 +36,32 @@ export async function generateMetadata({ params }: PageProps<"/cars/[id]">): Pro
   return { title: `${listingTitle(listing)} — ${formatPrice(listing.price, listing.currency)}` };
 }
 
-export default async function ListingPage({ params }: PageProps<"/cars/[id]">) {
+// Номер объявления берётся из адреса, поэтому сама страница показывается «на лету»,
+// а пока грузится, видна заглушка (так же устроен список /cars).
+export default function ListingPage({ params }: PageProps<"/cars/[id]">) {
+  return (
+    <Suspense fallback={<ListingSkeleton />}>
+      <ListingContent params={params} />
+    </Suspense>
+  );
+}
+
+function ListingSkeleton() {
+  return (
+    <div className="mx-auto max-w-6xl px-4 py-8">
+      <div className="h-8 w-2/3 animate-pulse rounded-lg bg-slate-200" />
+      <div className="mt-5 grid gap-8 lg:grid-cols-[1fr_360px]">
+        <div className="aspect-[4/3] animate-pulse rounded-2xl bg-slate-200" />
+        <div className="h-64 animate-pulse rounded-2xl bg-slate-200" />
+      </div>
+    </div>
+  );
+}
+
+async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params">) {
   const listing = getListing((await params).id);
   if (!listing) notFound();
+  const similar = getSimilarListings(listing);
 
   // Показываем только характеристики, которые известны
   const specs = (
@@ -39,6 +70,7 @@ export default async function ListingPage({ params }: PageProps<"/cars/[id]">) {
       ["Пробег", listing.mileage !== undefined ? formatMileage(listing.mileage) : undefined],
       ["Кузов", listing.bodyType],
       ["Цвет", listing.color?.name],
+      ["Салон", listing.interiorColor],
       ["Двигатель", listing.engine],
       ["Топливо", listing.fuel],
       ["Коробка", listing.transmission],
@@ -114,7 +146,7 @@ export default async function ListingPage({ params }: PageProps<"/cars/[id]">) {
           )}
 
           <h2 className="mt-8 mb-3 text-xl font-bold">
-            {listing.source ? "Описание из Instagram" : "Комментарий продавца"}
+            {listing.source ? `Описание из ${SOURCE_LABELS[listing.source.platform]}` : "Комментарий продавца"}
           </h2>
           {/* whitespace-pre-line сохраняет переносы строк, как в посте */}
           <p className="leading-relaxed whitespace-pre-line text-slate-700">{listing.description}</p>
@@ -129,6 +161,42 @@ export default async function ListingPage({ params }: PageProps<"/cars/[id]">) {
               <p className="mt-1 text-sm text-slate-500">
                 ≈ {formatPrice(priceInSum(listing))} по тестовому курсу
               </p>
+            )}
+            {listing.priceType && (
+              <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                {PRICE_TYPE_LABELS[listing.priceType]}: это цена не за машину в наличии, уточняйте у продавца
+                срок и полную стоимость.
+              </p>
+            )}
+            {listing.market && (
+              <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-sm">
+                <p className={`font-medium ${MARKET_COLORS[listing.market.label]}`}>
+                  {MARKET_LABELS[listing.market.label]}
+                </p>
+                <p className="text-slate-600">
+                  Похожие машины: около {formatPrice(listing.market.price, "USD")}, обычно от{" "}
+                  {formatPrice(listing.market.low, "USD")} до {formatPrice(listing.market.high, "USD")}. Сравнили с{" "}
+                  {listing.market.count} объявлениями той же модели и близкого года.
+                </p>
+              </div>
+            )}
+            {listing.liquidity && (
+              <p className="mt-2 text-sm text-slate-600">{LIQUIDITY_LABELS[listing.liquidity]} (по отметкам «продано»)</p>
+            )}
+            {listing.alsoAt && listing.alsoAt.length > 0 && (
+              <div className="mt-2 text-sm text-slate-600">
+                Эта же машина в других каналах:
+                <ul className="mt-1 space-y-0.5">
+                  {listing.alsoAt.map((place) => (
+                    <li key={place.url}>
+                      <a href={place.url} target="_blank" rel="noopener noreferrer" className="text-sky-600 hover:underline">
+                        {place.account}
+                      </a>
+                      {place.price !== undefined && `: ${formatPrice(place.price, "USD")}`}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
             {listing.price === undefined && (
               <p className="mt-1 text-sm text-slate-500">Продавец не указал цену в посте, уточняйте у него.</p>
@@ -162,7 +230,7 @@ export default async function ListingPage({ params }: PageProps<"/cars/[id]">) {
             {listing.source && (
               <>
                 <p className="mt-5 text-sm text-slate-500">
-                  Объявление из Instagram{" "}
+                  Объявление из {SOURCE_LABELS[listing.source.platform]}{" "}
                   <span className="font-medium text-slate-700">@{listing.source.account}</span>.
                   Контакты продавца — в описании.
                 </p>
@@ -170,9 +238,11 @@ export default async function ListingPage({ params }: PageProps<"/cars/[id]">) {
                   href={listing.source.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="mt-4 block rounded-xl bg-gradient-to-r from-fuchsia-600 to-orange-500 px-4 py-3 text-center font-semibold text-white hover:opacity-90"
+                  className={`mt-4 block rounded-xl px-4 py-3 text-center font-semibold text-white hover:opacity-90 ${
+                    listing.source.platform === "telegram" ? "bg-sky-500" : "bg-gradient-to-r from-fuchsia-600 to-orange-500"
+                  }`}
                 >
-                  Открыть в Instagram ↗
+                  Открыть в {SOURCE_LABELS[listing.source.platform]} ↗
                 </a>
                 <Link
                   href={`/cars?seller=${encodeURIComponent(listing.source.account)}`}
@@ -189,6 +259,25 @@ export default async function ListingPage({ params }: PageProps<"/cars/[id]">) {
           </div>
         </aside>
       </div>
+
+      {similar.length > 0 && (
+        <section className="mt-10">
+          <div className="flex items-baseline justify-between gap-4">
+            <h2 className="text-xl font-bold">Похожие объявления</h2>
+            <Link
+              href={`/cars?brand=${encodeURIComponent(listing.brand)}&model=${encodeURIComponent(listing.model)}`}
+              className="text-sm font-medium text-emerald-700 hover:underline"
+            >
+              Все {listing.brand} {listing.model}
+            </Link>
+          </div>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {similar.map((car) => (
+              <ListingCard key={car.id} listing={car} />
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

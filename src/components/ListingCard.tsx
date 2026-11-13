@@ -4,7 +4,7 @@ import Link from "next/link";
 import { ListingPhoto } from "./ListingPhoto";
 import { Freshness } from "./Freshness";
 import { formatMileage, formatPrice } from "@/lib/format";
-import { listingTitle, priceInSum, type Listing } from "@/lib/listings";
+import { listingTitle, MARKET_COLORS, MARKET_LABELS, priceInSum, PRICE_TYPE_LABELS, SOURCE_LABELS, type Listing } from "@/lib/listings";
 
 export function ListingCard({ listing }: { listing: Listing }) {
   // Показываем только то, что известно: у Instagram-объявлений нет коробки, топлива и т.п.
@@ -32,8 +32,12 @@ export function ListingCard({ listing }: { listing: Listing }) {
           </span>
         )}
         {listing.source && (
-          <span className="absolute top-2 left-2 rounded-full bg-gradient-to-r from-fuchsia-600 to-orange-500 px-2 py-0.5 text-xs font-semibold text-white shadow">
-            Instagram
+          <span
+            className={`absolute top-2 left-2 rounded-full px-2 py-0.5 text-xs font-semibold text-white shadow ${
+              listing.source.platform === "telegram" ? "bg-sky-500" : "bg-gradient-to-r from-fuchsia-600 to-orange-500"
+            }`}
+          >
+            {SOURCE_LABELS[listing.source.platform]}
           </span>
         )}
       </div>
@@ -46,6 +50,14 @@ export function ListingCard({ listing }: { listing: Listing }) {
             </span>
           )}
         </p>
+        {listing.market && !listing.isSold && listing.market.label !== "fair" && (
+          <p className={`text-xs font-medium ${MARKET_COLORS[listing.market.label]}`}>
+            {MARKET_LABELS[listing.market.label]}
+          </p>
+        )}
+        {listing.priceType && (
+          <p className="text-xs font-medium text-amber-700">{PRICE_TYPE_LABELS[listing.priceType]}</p>
+        )}
         {listing.downPayment !== undefined && (
           <p className="text-sm text-emerald-700">
             В рассрочку, взнос от {formatPrice(listing.downPayment, "USD")}

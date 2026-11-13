@@ -3,11 +3,13 @@
 import Link from "next/link";
 import { ListingCard } from "@/components/ListingCard";
 import { SearchForm } from "@/components/SearchForm";
-import { getBrandModels, searchListings } from "@/lib/listings";
+import { SiteStats } from "@/components/SiteStats";
+import { countActiveListings, getBrandModels, getPopularBrands, searchListings } from "@/lib/listings";
 
 export default function HomePage() {
   const latest = searchListings({ sort: "new" }).slice(0, 8);
   const brands = getBrandModels();
+  const popularBrands = getPopularBrands();
 
   return (
     <>
@@ -24,7 +26,7 @@ export default function HomePage() {
             <SearchForm brands={brands} />
           </div>
           <div className="mt-5 flex flex-wrap gap-2">
-            {Object.keys(brands).map((brand) => (
+            {popularBrands.map((brand) => (
               <Link
                 key={brand}
                 href={`/cars?brand=${encodeURIComponent(brand)}`}
@@ -49,6 +51,7 @@ export default function HomePage() {
             <ListingCard key={listing.id} listing={listing} />
           ))}
         </div>
+        <SiteStats listings={countActiveListings()} />
       </section>
     </>
   );

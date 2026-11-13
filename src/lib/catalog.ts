@@ -30,10 +30,10 @@ export const FUEL_TYPES = ["Бензин", "Газ/бензин", "Дизель"
 export const TRANSMISSIONS = ["Механика", "Автомат"] as const;
 export const DRIVES = ["Передний", "Задний", "Полный"] as const;
 
-export const OLDEST_YEAR = 1990;
+export const OLDEST_YEAR = 2006;
 export const NEWEST_YEAR = 2026;
 
-// Список годов от новых к старым: [2026, 2025, ..., 1990]
+// Список годов от новых к старым: [2026, 2025, ..., 2006]
 export const YEARS = Array.from(
   { length: NEWEST_YEAR - OLDEST_YEAR + 1 },
   (_, i) => NEWEST_YEAR - i,

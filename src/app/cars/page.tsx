@@ -5,7 +5,8 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { ListingCard } from "@/components/ListingCard";
 import { SearchForm } from "@/components/SearchForm";
-import { filtersFromSearchParams, getBrandModels, searchListings } from "@/lib/listings";
+import { filtersFromSearchParams, getBrandModels, PAGE_SIZE, searchListings } from "@/lib/listings";
+import { parseNumber } from "@/lib/format";
 
 export const metadata: Metadata = { title: "Объявления о продаже авто" };
 
@@ -23,8 +24,25 @@ export default function CarsPage({ searchParams }: PageProps<"/cars">) {
 }
 
 async function Results({ searchParams }: Pick<PageProps<"/cars">, "searchParams">) {
-  const filters = filtersFromSearchParams(await searchParams);
+  const params = await searchParams;
+  const filters = filtersFromSearchParams(params);
   const listings = searchListings(filters);
+
+  // Страницы: /cars?page=2. Показываем по PAGE_SIZE карточек, а не всё сразу
+  const pageCount = Math.max(1, Math.ceil(listings.length / PAGE_SIZE));
+  const page = Math.min(Math.max(1, Math.floor(parseNumber(params.page) ?? 1)), pageCount);
+  const pageListings = listings.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  // Ссылка на другую страницу с теми же фильтрами
+  const pageHref = (target: number) => {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (typeof value === "string" && value && key !== "page") query.set(key, value);
+    }
+    if (target > 1) query.set("page", String(target));
+    const text = query.toString();
+    return text ? `/cars?${text}` : "/cars";
+  };
 
   return (
     <>
@@ -42,10 +60,13 @@ async function Results({ searchParams }: Pick<PageProps<"/cars">, "searchParams"
           </Link>
         </p>
       )}
-      <p className="mb-4 text-sm text-slate-500">Найдено объявлений: {listings.length}</p>
+      <p className="mb-4 text-sm text-slate-500">
+        Найдено объявлений: {listings.length}
+        {pageCount > 1 && ` · страница ${page} из ${pageCount}`}
+      </p>
       {listings.length > 0 ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {listings.map((listing) => (
+          {pageListings.map((listing) => (
             <ListingCard key={listing.id} listing={listing} />
           ))}
         </div>
@@ -57,7 +78,53 @@ async function Results({ searchParams }: Pick<PageProps<"/cars">, "searchParams"
           </Link>
         </div>
       )}
+      {pageCount > 1 && <Pagination page={page} pageCount={pageCount} pageHref={pageHref} />}
     </>
+  );
+}
+
+// Кнопки «Назад», номера страниц и «Вперёд» под лентой
+function Pagination({
+  page,
+  pageCount,
+  pageHref,
+}: {
+  page: number;
+  pageCount: number;
+  pageHref: (target: number) => string;
+}) {
+  // Показываем первую, последнюю и по две соседние с текущей: 1 … 4 5 [6] 7 8 … 159
+  const numbers = Array.from({ length: pageCount }, (_, i) => i + 1).filter(
+    (n) => n === 1 || n === pageCount || Math.abs(n - page) <= 2,
+  );
+  const button = "rounded-xl px-3 py-2 text-sm font-medium ring-1 ring-slate-200";
+  return (
+    <nav className="mt-8 flex flex-wrap items-center justify-center gap-2" aria-label="Страницы">
+      {page > 1 && (
+        <Link href={pageHref(page - 1)} className={`${button} bg-white text-slate-700 hover:bg-slate-50`}>
+          ← Назад
+        </Link>
+      )}
+      {numbers.map((n, i) => (
+        <span key={n} className="flex items-center gap-2">
+          {i > 0 && n - numbers[i - 1] > 1 && <span className="text-slate-400">…</span>}
+          {n === page ? (
+            <span className={`${button} bg-emerald-600 text-white ring-emerald-600`} aria-current="page">
+              {n}
+            </span>
+          ) : (
+            <Link href={pageHref(n)} className={`${button} bg-white text-slate-700 hover:bg-slate-50`}>
+              {n}
+            </Link>
+          )}
+        </span>
+      ))}
+      {page < pageCount && (
+        <Link href={pageHref(page + 1)} className={`${button} bg-white text-slate-700 hover:bg-slate-50`}>
+          Вперёд →
+        </Link>
+      )}
+    </nav>
   );
 }
 
