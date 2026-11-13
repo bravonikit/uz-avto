@@ -1,5 +1,5 @@
 #!/bin/bash
-# Полный прогон парсера: скачать новые посты → найти цены → выгрузить на сайт → показать статус.
+# Полный прогон парсера: скачать новые посты Instagram и Telegram → разобрать → выгрузить на сайт → показать статус.
 # Запуск вручную:  ./run_daily.sh
 # Каждый день его запускает macOS сама (см. install_schedule.sh).
 # Лог каждого дня: data/logs/ГГГГ-ММ-ДД.log
@@ -27,9 +27,16 @@ if [ -t 1 ]; then HOW="вручную"; else HOW="авто"; fi
 {
     echo "===== $STARTED старт ($HOW) ====="
     # caffeinate не даёт Маку уснуть, пока идёт скачивание
+    # Instagram: если скачать не вышло (нет входа, API закрыт), разбор старых постов всё равно не трогаем
     caffeinate -i "$PYTHON" download.py \
         && "$PYTHON" extract_price.py \
-        && "$PYTHON" export_to_site.py
+        && "$PYTHON" enrich.py
+    echo
+    # Telegram качается и разбирается отдельно: работает, даже когда Instagram недоступен
+    caffeinate -i "$PYTHON" tg_download.py && "$PYTHON" tg_parse.py | tail -4
+    echo
+    # Сайт собираем всегда из того, что есть на диске
+    "$PYTHON" export_to_site.py | grep -v "^  [A-Za-z0-9_.]*: [0-9]* объявлений$"
     echo
     "$PYTHON" status.py
     echo "===== $(date '+%d.%m.%Y %H:%M') конец ====="

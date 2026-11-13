@@ -8,7 +8,7 @@ from export_to_site import find_price_suspects
 def car(id: str, price: int | None, year: int | None = 2024, account: str | None = None) -> dict:
     return {
         "id": id, "brand": "BMW", "model": "X7", "year": year, "price": price,
-        "source_account": account or f"shop_{id}",
+        "source_account": account or f"shop_{id}", "price_type": None,
     }
 
 

@@ -96,8 +96,20 @@ def check(code: str, text: str, year: int | None, mileage: int | None) -> list[s
     return problems
 
 
+def all_posts() -> dict[str, dict]:
+    """Все скачанные посты, включая те, что правила сочли анонсами: {shortcode: пост}."""
+    result = {}
+    for account in load_accounts_from_file():
+        raw_file = account_dir(account) / "raw_posts.json"
+        if raw_file.exists():
+            for post in json.loads(raw_file.read_text(encoding="utf-8")):
+                result.setdefault(post["shortcode"], post)
+    return result
+
+
 def apply(file_name: str) -> None:
-    posts = posts_with_price()
+    # Разобрать можно любой пост: если ЛЛМ признала анонс объявлением, он попадёт на сайт
+    posts = all_posts()
     parsed = load_parsed()
     saved, problems = 0, []
     for line in open(file_name, encoding="utf-8"):

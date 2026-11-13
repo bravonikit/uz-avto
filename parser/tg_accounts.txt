@@ -1,0 +1,53 @@
+# Telegram каналы продавцов: канал, пробел, его Instagram аккаунт (если их два, через запятую без пробела).
+# Связка нужна, чтобы понимать, что это один продавец, и склеивать дубли.
+# Строки с # пропускаются. Полная сверка лежит в Notion: «Продавцы: Instagram и Telegram».
+
+# Уже скачаны 13.11.2026
+ciptashkentuz     cip_tashkent_uz
+evcarsuzb         ev_cars.uz
+azaavtoo          aza.avtoo
+A7_Motors_Avto    7motorsavto
+ars_auto_channel  ars.auto.uz
+
+# Telegram полностью заменяет Instagram
+auto_shop_uzb                    700autoshop
+a721_motors                      721_motors,inomarkachi_abdullo
+arzon_mash1na                    arzon.mashina
+aslauto                          asl_auto.uz
+autosaleabdulloh                 auto_sale_abdulloh
+autopriceuz_moshinabozor         autopriceuz
+autovitauz                       autovita.uz
+avtuarcha                        avto.archa
+PREMIUM_AVTO_KREDIT_INDEX_KANAL  avto_kredit_premium
+byd_rustam                       byd_rustam
+carspremiummotors                cars_premium_motors
+VTsale                           dilshodnasyrov
+moshinasale_uz                   moshinasale
+MTG_Nasiya_AvtoCar               mtg.nasiya.naxt.avtocar
+sharqavto                        sharqavto
+TuronAvto1                       turon.avto
+usmonmotors                      usmon.motors
+
+# Совпадает частично, нужны обе площадки
+showroomavenue   avenue_motors
+avtolux_premium  avtolux.premium
+avtonasiyauzb    avtomir__uzb
+BmwBozor_uz      bmw_bozor.uz
+Carsmiruzb       carsmir.uzb
+hamidovauto      hamidov.auto
+hoji_eurocars    hoji_eurocars
+Moshinabazar     izmir_motors_
+maqsudauto       maqsud.auto
+
+# Цена текстом только в Telegram
+archakochaavto  archa.kocha_avto
+rostanarzonnn   rostan.arzon
+komolon_avto    kamolon_avto
+avto_otash      avto_otash
+
+# Самый большой канал, около 48 постов в день: первый обход займёт пару часов и около 1 ГБ.
+# Уберите # перед строкой, когда будете готовы.
+# carsaleuzb  carsaleuz,evcarsaleuz
+
+# Заброшен с октября 2023
+# Biloljon_MotorsUz  biloljon_motors

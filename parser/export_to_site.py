@@ -1,13 +1,18 @@
-"""Выгружает объявления из Instagram для сайта (тестовый режим, без базы).
+"""Выгружает объявления из Instagram и Telegram для сайта (тестовый режим, без базы).
 
-Берёт:   data/<аккаунт>/raw_posts.json, data/<аккаунт>/prices.json по всем аккаунтам
-Пишет:   ../src/data/instagram-listings.json  (все аккаунты в одном файле)
-         ../public/ig/<shortcode>.jpg
+Берёт:   data/<аккаунт>/raw_posts.json, data/<аккаунт>/prices.json по всем аккаунтам Instagram
+         data/_tg/listings.json  объявления Telegram (их готовит tg_parse.py)
+Пишет:   ../src/data/instagram-listings.json  (все объявления в одном файле, имя осталось старое)
+         ../public/ig/<shortcode>.jpg, ../public/tg/<id>.jpg
+
+Если продавец выложил одну машину и в Instagram, и в Telegram, на сайте остаётся одна карточка
+(из Telegram: там правки цены и «продано»), ссылка на второй пост лежит в поле also_at.
 
 Запуск: python export_to_site.py
 """
 
 import json
+import os
 import re
 import shutil
 from datetime import datetime
@@ -18,6 +23,10 @@ from accounts import PARSER_DIR, account_dir, load_accounts
 SITE_DIR = PARSER_DIR.parent
 OUTPUT_FILE = SITE_DIR / "src" / "data" / "instagram-listings.json"
 SITE_IMAGES_DIR = SITE_DIR / "public" / "ig"
+TG_LISTINGS_FILE = PARSER_DIR / "data" / "_tg" / "listings.json"
+TG_ACCOUNTS_FILE = PARSER_DIR / "tg_accounts.txt"
+SITE_TG_IMAGES_DIR = SITE_DIR / "public" / "tg"
+CROSS_POST_DAYS = 45  # один продавец, Instagram и Telegram: посты про одну машину не дальше друг от друга
 # Разбор постов языковой моделью: {shortcode: {brand, model, year, mileage_km, is_sold, is_listing, note}}.
 # Если пост там есть, его поля важнее регулярок ниже. Постов, которых там нет, регулярки разбирают как раньше.
 LLM_PARSED_FILE = PARSER_DIR / "data" / "llm_parsed.json"
@@ -143,6 +152,11 @@ def find_mileage(text: str) -> int | None:
     return int(digits) if digits else None
 
 
+# Поля из enrich.py. price_type: None = в наличии, "cip" = цена с доставкой до Ташкента без растаможки,
+# "no_customs" = без растаможки, "order" = под заказ.
+EXTRA_FIELDS = ("price_type", "fuel", "body_color", "body_color_hex", "interior_color", "city")
+
+
 def load_llm_parsed() -> dict:
     if not LLM_PARSED_FILE.exists():
         return {}
@@ -163,6 +177,9 @@ def apply_llm(listing: dict, parsed: dict | None) -> dict | None:
         mileage = None
     brand, model = parsed.get("brand"), parsed.get("model")
     listing.update(brand=brand, model=model, year=year, mileage_km=mileage, is_sold=bool(parsed.get("is_sold")))
+    # Дополнительные поля из enrich.py: тип цены, топливо, цвета, город
+    for key in EXTRA_FIELDS:
+        listing[key] = parsed.get(key)
     # Название из поста оставляем, если в нём есть модель; иначе собираем "Марка Модель"
     title = re.sub(r"^(?:модель|model)\s*:\s*", "", listing["title"] or "", flags=re.IGNORECASE)
     listing["title"] = title or None
@@ -239,6 +256,94 @@ def merge_account_duplicates(listings: list[dict]) -> tuple[list[dict], int]:
     return kept, removed
 
 
+# Объявления Telegram и склейка с Instagram того же продавца
+
+def link_image(source, target) -> None:
+    """Жёсткая ссылка вместо копии: картинка не занимает место на диске второй раз."""
+    if target.exists():
+        return
+    try:
+        os.link(source, target)
+    except OSError:
+        shutil.copyfile(source, target)
+
+
+def telegram_listings() -> list[dict]:
+    """Объявления Telegram в том же виде, что и объявления Instagram. Без марки и удалённые не берём."""
+    if not TG_LISTINGS_FILE.exists():
+        return []
+    SITE_TG_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    listings = []
+    for item in json.loads(TG_LISTINGS_FILE.read_text(encoding="utf-8")):
+        if not item["brand"] or item.get("removed_at"):
+            continue
+        image = None
+        if item["image"] and (PARSER_DIR / item["image"]).exists():
+            link_image(PARSER_DIR / item["image"], SITE_TG_IMAGES_DIR / f"{item['id']}.jpg")
+            image = f"/tg/{item['id']}.jpg"
+        listing = {key: item[key] for key in (
+            "id", "title", "brand", "model", "year", "mileage_km", "price", "currency", "down_payment",
+            "description", "is_sold", "source_url", "source_account", "date", *EXTRA_FIELDS, "duplicate_ids", "price_history",
+        )}
+        listing["image"] = image
+        listing["source"] = "telegram"
+        listing["also_at"] = []
+        # Прайс по комплектациям без слов «под заказ»: на сайте это тоже не машина в наличии
+        if item["kind"] == "catalog" and listing["price_type"] is None:
+            listing["price_type"] = "order"
+        listings.append(listing)
+    return listings
+
+
+def channel_accounts() -> dict[str, set[str]]:
+    """Telegram канал → Instagram аккаунты того же продавца (из tg_accounts.txt, включая выключенные строки)."""
+    links: dict[str, set[str]] = {}
+    if not TG_ACCOUNTS_FILE.exists():
+        return links
+    for line in TG_ACCOUNTS_FILE.read_text(encoding="utf-8").splitlines():
+        parts = line.strip().lstrip("#").strip().split()
+        if len(parts) == 2 and re.fullmatch(r"[\w+]+", parts[0]) and re.fullmatch(r"[\w.,]+", parts[1]):
+            links.setdefault(parts[0].lower(), set()).update(parts[1].lower().split(","))
+    return links
+
+
+def same_car_across(telegram: dict, instagram: dict) -> bool:
+    """Пост Telegram и пост Instagram одного продавца про одну машину?"""
+    if hours_between(telegram, instagram) > CROSS_POST_DAYS * 24:
+        return False
+    first, second = text_key(telegram["description"])[:80], text_key(instagram["description"])[:80]
+    if len(first) >= 30 and first == second:
+        return True
+    same = lambda key: telegram[key] is not None and telegram[key] == instagram[key]  # noqa: E731
+    same_brand = bool(telegram["brand"]) and (telegram["brand"] or "").lower() == (instagram["brand"] or "").lower()
+    if same("price") and (same("year") or (same("mileage_km") and telegram["mileage_km"]) or same_brand):
+        return True
+    return same("year") and same("mileage_km") and bool(telegram["mileage_km"]) and same_brand
+
+
+def merge_across_sources(instagram: list[dict], telegram: list[dict]) -> tuple[list[dict], int]:
+    """Склеивает посты одного продавца из двух площадок. Возвращает (все объявления, сколько склеено)."""
+    links = channel_accounts()
+    by_account: dict[str, list[dict]] = {}
+    for item in instagram:
+        by_account.setdefault(item["source_account"].lower(), []).append(item)
+    merged_ids = set()
+    for item in telegram:
+        for account in links.get(item["source_account"].lower(), ()):
+            for other in by_account.get(account, []):
+                if other["id"] in merged_ids or not same_car_across(item, other):
+                    continue
+                merged_ids.add(other["id"])
+                item["duplicate_ids"] = item["duplicate_ids"] + [other["id"]] + other["duplicate_ids"]
+                item["also_at"].append({"source": "instagram", "account": other["source_account"], "url": other["source_url"]})
+                item["is_sold"] = item["is_sold"] or other["is_sold"]
+                for key in ("price", "currency", "down_payment", "year", "mileage_km", "model", "image", *EXTRA_FIELDS):
+                    if item[key] is None:
+                        item[key] = other[key]
+    rest = [item for item in instagram if item["id"] not in merged_ids]
+    return sorted(rest + telegram, key=lambda item: item["date"], reverse=True), len(merged_ids)
+
+
 def load_price_overrides() -> dict:
     if not PRICE_OVERRIDES_FILE.exists():
         return {}
@@ -266,6 +371,8 @@ def find_price_suspects(listings: list[dict], checked: set[str]) -> dict[str, st
             and other["year"] is not None
             and abs(other["year"] - year) <= ANALOG_YEARS
             and other["source_account"] != item["source_account"]
+            # цена под заказ или без растаможки с ценой в наличии не сравнивается
+            and other["price_type"] == item["price_type"]
         ]
         if len(analogs) < MIN_ANALOGS:
             continue
@@ -326,10 +433,12 @@ def account_listings(account: str, llm_parsed: dict) -> list[dict]:
     listings = []
     for post in posts:
         price = prices.get(post["url"])
-        if price is None or price["is_announcement"]:
+        if price is None:
             continue
         parsed = llm_parsed.get(post["shortcode"])
-        if price["price"] is None and not (parsed and parsed.get("is_listing", True)):
+        approved = bool(parsed) and parsed.get("is_listing", True)
+        # Пост без цены или похожий на анонс попадает на сайт, только если ЛЛМ признала его объявлением
+        if (price["is_announcement"] or price["price"] is None) and not approved:
             continue
 
         text = post["description"]
@@ -352,6 +461,7 @@ def account_listings(account: str, llm_parsed: dict) -> list[dict]:
                 "source_url": post["url"],
                 "source_account": account,
                 "date": post["date"],
+                **dict.fromkeys(EXTRA_FIELDS),
             },
             parsed,
         )
@@ -375,6 +485,11 @@ def main() -> None:
                 listings.append(listing)
     # Свежие первыми. Дубли убираем до проверки цен
     listings, duplicates = merge_account_duplicates(listings)
+    for item in listings:
+        item.update(source="instagram", also_at=[], price_history=[])
+    instagram_count = len(listings)
+    telegram = telegram_listings()
+    listings, cross_duplicates = merge_across_sources(listings, telegram)
     suspects = hide_suspect_prices(listings)
 
     OUTPUT_FILE.write_text(json.dumps(listings, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -383,9 +498,12 @@ def main() -> None:
         return sum(1 for item in listings if item[key] is not None)
 
     print(f"\nВыгружено объявлений: {len(listings)} → {OUTPUT_FILE.relative_to(SITE_DIR)}")
-    print(f"  убрано дублей внутри аккаунтов: {duplicates}")
+    print(f"  Instagram: {instagram_count}, Telegram: {len(telegram)}, одна машина на обеих площадках: {cross_duplicates}")
+    print(f"  убрано дублей внутри аккаунтов Instagram: {duplicates}")
     print(f"  с годом: {count('year')}, с пробегом: {count('mileage_km')}, с фото: {count('image')}")
     print(f"  с ценой: {count('price')}, цена по запросу: {len(listings) - count('price')}")
+    print(f"  не в наличии (под заказ, CIP, без растаможки): {count('price_type')}, с топливом: {count('fuel')}, "
+          f"с цветом: {count('body_color')}, с городом: {count('city')}")
     if suspects:
         print(f"  подозрительных цен: {len(suspects)} (скрыты, список в data/{PRICE_SUSPECTS_FILE.name})")
         for item in suspects:

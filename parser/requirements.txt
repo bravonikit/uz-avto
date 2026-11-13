@@ -2,3 +2,4 @@
 gallery-dl==1.32.19  # получает посты Instagram
 browser-cookie3==0.20.1  # берёт вход в Instagram из браузера
 requests==2.34.2  # скачивает картинки
+beautifulsoup4==4.12.3  # разбирает страницы Telegram каналов
