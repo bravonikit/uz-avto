@@ -41,6 +41,9 @@ parser/.venv/
 parser/.env
 !parser/.env.example
 parser/data/
+# вход в Telegram (tg_login.py): это ключ от аккаунта
+parser/*.session
+parser/*.session-journal
 __pycache__/
 
 # typescript
