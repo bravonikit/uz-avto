@@ -143,6 +143,9 @@ def parse_page(html: str, channel: str) -> list[dict]:
             kind = "text"
 
         forwarded = message.select_one(".tgme_widget_message_forwarded_from_name")
+        # Ответ на другой пост канала: «ПРОДАНО!» реплаем на исходное объявление
+        reply = message.select_one("a.tgme_widget_message_reply[href]")
+        reply_match = re.search(rf"/{re.escape(channel)}/(\d+)", reply["href"], re.IGNORECASE) if reply else None
         meta = message.select_one(".tgme_widget_message_meta")
         views = message.select_one(".tgme_widget_message_views")
         posts.append({
@@ -159,6 +162,7 @@ def parse_page(html: str, channel: str) -> list[dict]:
             "views": parse_views(views.get_text() if views else None),
             "edited": bool(meta and "edited" in meta.get_text()),
             "forwarded_from": forwarded.get_text().strip() if forwarded else None,
+            "reply_to": int(reply_match.group(1)) if reply_match else None,
         })
     return sorted(posts, key=lambda post: post["id"])
 
@@ -205,7 +209,7 @@ def merge_posts(known: dict[str, dict], fetched: list[dict], seen_at: str, full_
             old["changed_at"] = seen_at
             counts["changed"] += 1
         # Ссылки на картинки у Telegram временные, держим свежие. Скачанные файлы (images) не трогаем
-        for field in ("photos", "video_thumbs", "video_durations", "video_url", "views", "edited", "type"):
+        for field in ("photos", "video_thumbs", "video_durations", "video_url", "views", "edited", "type", "reply_to"):
             old[field] = post[field]
         old["last_seen"] = seen_at
         old.pop("removed_at", None)

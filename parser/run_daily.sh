@@ -34,11 +34,17 @@ if [ -t 1 ]; then HOW="вручную"; else HOW="авто"; fi
     echo
     # Telegram качается и разбирается отдельно: работает, даже когда Instagram недоступен
     caffeinate -i "$PYTHON" tg_download.py && "$PYTHON" tg_parse.py | tail -4
+    # Видео и кружки: сначала скачать целиком в сырой слой на Диске (ссылки живут недолго, поэтому сразу),
+    # потом раскадровка и звук. Подробности в tg_video.py
+    caffeinate -i "$PYTHON" tg_video.py | grep "^Видео"
     echo
     # Сайт собираем всегда из того, что есть на диске
     "$PYTHON" export_to_site.py | grep -v "^  [A-Za-z0-9_.]*: [0-9]* объявлений$"
     echo
     "$PYTHON" status.py
+    echo
+    # Резервная копия данных и переезд старых фото на Google Диск. Диск не подключён: шаг пропускается
+    "$PYTHON" archive.py
     echo "===== $(date '+%d.%m.%Y %H:%M') конец ====="
     echo
 } 2>&1 | tee -a "$LOG"

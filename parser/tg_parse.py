@@ -22,7 +22,9 @@ from collections import Counter
 from enrich import extra_fields, find_price_type
 from export_to_site import MAX_MILEAGE_KM, find_year, merge_account_duplicates
 from extract_price import find_down_payment, find_prices, main_price
+from accounts import PARSER_DIR
 from tg_download import TG_DIR
+from tg_sold import link_sold
 
 LISTINGS_FILE = TG_DIR / "listings.json"
 # Разбор ЛЛМ для постов, с которыми правила не справились: {id: {is_listing, brand, model, year, mileage_km, price, is_sold}}.
@@ -244,7 +246,8 @@ def parse_post(post: dict) -> dict:
 
     if SERVICE.search(text):
         kind = "other"
-    elif is_sold and not brand and len(re.sub(r"\W", "", text)) < 60:
+    elif is_sold and price is None and len(re.sub(r"\W", "", text)) < 60:
+        # Короткое «продано» без цены, даже с моделью («W211 E240 Sotildi»): отметка о продаже, не объявление
         kind = "sold_notice"
     elif brand and (price is not None or year is not None or mileage is not None):
         on_order = price_type in ("cip", "order") and not mileage
@@ -268,7 +271,7 @@ def parse_post(post: dict) -> dict:
         **extra_fields(text),
         "description": text, "source": "telegram", "source_account": post["channel"], "source_url": post["url"],
         "date": post["date"], "views": post.get("views"), "edited": post.get("edited", False),
-        "first_seen": post.get("first_seen"), "removed_at": post.get("removed_at"),
+        "first_seen": post.get("first_seen"), "removed_at": post.get("removed_at"), "reply_to": post.get("reply_to"),
     }
 
 
@@ -310,6 +313,9 @@ def post_images(post: dict, posts: dict[str, dict]) -> tuple[list[str], bool]:
     return list(owner.get("images") or []), owner["type"] == "video" or bool(owner.get("video_durations"))
 
 
+SOLD_COUNTS: Counter = Counter()
+
+
 def parse_channel(channel: str, llm_parsed: dict) -> list[dict]:
     posts = json.loads((TG_DIR / channel / "posts.json").read_text(encoding="utf-8"))
     parsed = []
@@ -321,6 +327,8 @@ def parse_channel(channel: str, llm_parsed: dict) -> list[dict]:
         item["images"], item["has_video"] = post_images(post, posts)
         item["image"] = item["images"][0] if item["images"] else None
         parsed.append(item)
+    # Отдельные сообщения «продано» отмечают исходное объявление проданным
+    SOLD_COUNTS.update(link_sold(channel, parsed, TG_DIR / channel, PARSER_DIR))
     (TG_DIR / channel / "parsed.json").write_text(json.dumps(parsed, ensure_ascii=False, indent=1), encoding="utf-8")
     return parsed
 
@@ -359,6 +367,8 @@ def main() -> None:
           f"с пробегом {share('mileage_km')}, с фото {share('image')}")
     print(f"  проданы {sum(item['is_sold'] for item in cars)}, пост удалён {sum(1 for item in cars if item['removed_at'])}, "
           f"цена менялась {sum(1 for item in cars if item['price_history'])}, разобрано ЛЛМ {sum(1 for item in listings if item.get('llm'))}")
+    print(f"  «продано» отдельным постом связано с объявлением: ответом {SOLD_COUNTS['reply']}, по фото {SOLD_COUNTS['photo']}, "
+          f"по модели в тексте {SOLD_COUNTS['text']}, не нашлось {SOLD_COUNTS['none']} из {SOLD_COUNTS['notices']}")
 
 
 if __name__ == "__main__":
