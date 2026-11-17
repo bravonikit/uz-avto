@@ -1,22 +1,23 @@
 #!/bin/bash
-# Полный прогон парсера: скачать новые посты Instagram и Telegram → разобрать → выгрузить на сайт → показать статус.
+# Ежедневный прогон: скачать новые посты Instagram и Telegram → разобрать → выгрузить на сайт → статус.
+# Тяжёлое (видео целиком через аккаунт, раскадровка, кадры) сюда не входит: это run_video.sh,
+# он идёт отдельно и не держит обновление сайта.
 # Запуск вручную:  ./run_daily.sh
 # Каждый день его запускает macOS сама (см. install_schedule.sh).
 # Лог каждого дня: data/logs/ГГГГ-ММ-ДД.log
 
 PARSER_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$PARSER_DIR" || exit 1
+source ./lock.sh
 
 mkdir -p data/logs
 LOG="data/logs/$(date +%Y-%m-%d).log"
-LOCK="data/.run.lock"
 
 # Не запускать второй раз, если предыдущий прогон ещё идёт
-if ! mkdir "$LOCK" 2>/dev/null; then
+if ! take_lock daily; then
     echo "$(date '+%H:%M') прогон уже идёт, выхожу" | tee -a "$LOG"
     exit 0
 fi
-trap 'rmdir "$LOCK"' EXIT
 
 PYTHON="$PARSER_DIR/.venv/bin/python"
 # Без этого Python копит вывод и лог заполняется только в конце прогона
@@ -34,9 +35,14 @@ if [ -t 1 ]; then HOW="вручную"; else HOW="авто"; fi
     echo
     # Telegram качается и разбирается отдельно: работает, даже когда Instagram недоступен
     caffeinate -i "$PYTHON" tg_download.py && "$PYTHON" tg_parse.py | tail -4
-    # Видео и кружки: сначала скачать целиком в сырой слой на Диске (ссылки живут недолго, поэтому сразу),
-    # потом раскадровка и звук. Подробности в tg_video.py
-    caffeinate -i "$PYTHON" tg_video.py | grep "^Видео"
+    # Лёгкие видео и кружки сразу, пока ссылки со страницы свежие (через пару часов они протухают).
+    # Без аккаунта Telegram, быстро. Тяжёлые и раскадровку делает run_video.sh
+    # Если видеопрогон сейчас идёт, он сам скачает и лёгкие: два процесса на одни файлы не пускаем
+    if pgrep -f "tg_video.py" >/dev/null; then
+        echo "Видео: лёгкие скачает идущий видеопрогон"
+    else
+        caffeinate -i "$PYTHON" tg_video.py --only download --light-only | grep "^Видео"
+    fi
     echo
     # Сайт собираем всегда из того, что есть на диске
     "$PYTHON" export_to_site.py | grep -v "^  [A-Za-z0-9_.]*: [0-9]* объявлений$"

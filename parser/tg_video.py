@@ -18,6 +18,7 @@
   python tg_video.py                         оба шага, посты за FRESH_DAYS дней
   python tg_video.py --only download         только скачать
   python tg_video.py --only cut              только раскадровка уже скачанного
+  python tg_video.py --only download --light-only   только лёгкие, пока ссылки свежие (в run_daily.sh)
   python tg_video.py aslauto                 один канал
   python tg_video.py --days 90 --heavy-limit 1000   догнать старые видео (разово, вручную)
   python tg_video.py --only cut --redo       переделать раскадровку всех скачанных
@@ -206,8 +207,11 @@ def download_step(channels: list[str], places: Places, args) -> None:
                 if done + failed >= args.limit:
                     break
                 is_heavy = not post.get("video_url")
+                if args.light_only and is_heavy:
+                    continue  # тяжёлые качает отдельный видеопрогон (run_video.sh)
+                heavy_ok = not args.light_only and heavy < args.heavy_limit
                 try:
-                    status = download(channel, post, places, telegram, heavy < args.heavy_limit)
+                    status = download(channel, post, places, telegram, heavy_ok)
                 except Exception as error:  # noqa: BLE001  один ролик не должен ронять весь прогон
                     status = f"ошибка {type(error).__name__}: {str(error)[:120]}"
                 if status == "уже":
@@ -216,8 +220,8 @@ def download_step(channels: list[str], places: Places, args) -> None:
                 if status.startswith("тяжёлое"):
                     waiting += 1  # не ошибка: догонится, когда будет вход или в следующий прогон
                     continue
-                if is_heavy:
-                    heavy += 1
+                if "аккаунт" in status:
+                    heavy += 1  # через аккаунт, в том числе лёгкие с протухшей ссылкой: всё идёт в лимит
                 print(f"  {channel} {post['id']}: {status}")
                 if status.startswith("скачано"):
                     done += 1
@@ -262,6 +266,8 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=2000, help="роликов за запуск (скачка)")
     parser.add_argument("--days", type=int, default=FRESH_DAYS, help="за сколько дней брать посты")
     parser.add_argument("--heavy-limit", type=int, default=HEAVY_LIMIT, help="тяжёлых видео за запуск")
+    parser.add_argument("--light-only", action="store_true",
+                        help="только лёгкие видео по свежей ссылке со страницы, без аккаунта (сразу после tg_download.py)")
     parser.add_argument("--redo", action="store_true", help="переделать раскадровку, даже если она уже есть")
     args = parser.parse_args()
     places = Places()
