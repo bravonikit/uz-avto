@@ -26,6 +26,11 @@ export function ListingCard({ listing }: { listing: Listing }) {
           sizes="(min-width: 1024px) 25vw, (min-width: 640px) 50vw, 100vw"
           className={`transition group-hover:brightness-105 ${listing.isSold ? "opacity-60 grayscale" : ""}`}
         />
+        {listing.preview && listing.preview.kind !== "crop" && !listing.isSold && (
+          <span className="absolute bottom-2 left-2 rounded-full bg-black/75 px-2 py-0.5 text-xs font-semibold text-white">
+            {listing.preview.kind === "generated" ? "ИИ фото по видео" : "Края дорисованы ИИ"}
+          </span>
+        )}
         {listing.isSold && (
           <span className="absolute right-2 bottom-2 rounded-full bg-slate-900/80 px-2.5 py-0.5 text-xs font-semibold text-white">
             Продано
@@ -34,7 +39,7 @@ export function ListingCard({ listing }: { listing: Listing }) {
         {listing.source && (
           <span
             className={`absolute top-2 left-2 rounded-full px-2 py-0.5 text-xs font-semibold text-white shadow ${
-              listing.source.platform === "telegram" ? "bg-sky-500" : "bg-gradient-to-r from-fuchsia-600 to-orange-500"
+              "bg-black/75"
             }`}
           >
             {SOURCE_LABELS[listing.source.platform]}
@@ -59,11 +64,11 @@ export function ListingCard({ listing }: { listing: Listing }) {
           <p className="text-xs font-medium text-amber-700">{PRICE_TYPE_LABELS[listing.priceType]}</p>
         )}
         {listing.downPayment !== undefined && (
-          <p className="text-sm text-emerald-700">
+          <p className="text-sm text-slate-700">
             В рассрочку, взнос от {formatPrice(listing.downPayment, "USD")}
           </p>
         )}
-        <h3 className="font-medium text-slate-800 group-hover:text-emerald-700">
+        <h3 className="font-medium text-slate-800 group-hover:text-brand-700">
           {listingTitle(listing)}
         </h3>
         {details.length > 0 && <p className="text-sm text-slate-500">{details.join(" · ")}</p>}

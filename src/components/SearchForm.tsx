@@ -8,7 +8,7 @@ import { CITIES, YEARS } from "@/lib/catalog";
 import type { ListingFilters } from "@/lib/listings";
 
 const field =
-  "w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-100 disabled:text-slate-400";
+  "w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-100 disabled:text-slate-400";
 
 type Props = {
   brands: Record<string, string[]>; // марка → модели
@@ -108,14 +108,14 @@ export function SearchForm({ brands, initial = {} }: Props) {
           name="hideSold"
           value="1"
           defaultChecked={initial.hideSold}
-          className="size-4 accent-emerald-600"
+          className="size-4 accent-brand-600"
         />
         Скрыть проданные
       </label>
 
       <button
         type="submit"
-        className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700"
+        className="rounded-xl bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-700"
       >
         Показать объявления
       </button>

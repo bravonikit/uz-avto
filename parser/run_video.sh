@@ -26,7 +26,7 @@ export PYTHONUNBUFFERED=1
     echo "===== $(date '+%d.%m.%Y %H:%M') видео: старт ====="
     caffeinate -i "$PYTHON" tg_video.py --only download
     caffeinate -i "$PYTHON" tg_video.py --only cut
-    caffeinate -i "$PYTHON" video_frames.py --all --limit 300 | grep -E "^Видео|^Готово|ошибка"
+    caffeinate -i "$PYTHON" video_frames.py --all --limit 300 | grep --line-buffered -E "^Видео|^Готово|ошибка"
     echo "===== $(date '+%d.%m.%Y %H:%M') видео: конец ====="
     echo
-} 2>&1 | grep -vE "^Attempt [0-9]+ at connecting|Security error while unpacking|very old message" | tee -a "$LOG"
+} 2>&1 | grep --line-buffered -vE "^Attempt [0-9]+ at connecting|Security error while unpacking|very old message" | tee -a "$LOG"

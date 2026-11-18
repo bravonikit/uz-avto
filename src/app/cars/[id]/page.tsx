@@ -13,16 +13,17 @@ import { formatDate, formatMileage, formatPrice } from "@/lib/format";
 import {
   countSellerListings,
   getAllListingIds,
-  getListing,
   getSimilarListings,
   listingTitle,
   priceInSum,
   LIQUIDITY_LABELS,
   MARKET_COLORS,
   MARKET_LABELS,
+  PHOTO_QUALITY_NOTES,
   PRICE_TYPE_LABELS,
   SOURCE_LABELS,
 } from "@/lib/listings";
+import { findListing } from "@/lib/published";
 
 // Заранее (при сборке) создаём страницы для всех объявлений —
 // так они открываются мгновенно.
@@ -31,7 +32,7 @@ export function generateStaticParams() {
 }
 
 export async function generateMetadata({ params }: PageProps<"/cars/[id]">): Promise<Metadata> {
-  const listing = getListing((await params).id);
+  const listing = await findListing((await params).id);
   if (!listing) return { title: "Объявление не найдено" };
   return { title: `${listingTitle(listing)} — ${formatPrice(listing.price, listing.currency)}` };
 }
@@ -59,7 +60,8 @@ function ListingSkeleton() {
 }
 
 async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params">) {
-  const listing = getListing((await params).id);
+  // Объявление может быть собранным из Telegram или поданным продавцом через кабинет
+  const listing = await findListing((await params).id);
   if (!listing) notFound();
   const similar = getSimilarListings(listing);
 
@@ -118,6 +120,12 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
             </p>
           )}
 
+          {listing.photoQuality !== "good" && (
+            <p className="mt-3 rounded-xl bg-amber-50 px-4 py-2 text-sm text-amber-800">
+              {PHOTO_QUALITY_NOTES[listing.photoQuality]}
+            </p>
+          )}
+
           <div className="mt-5">
             {listing.image ? (
               <ListingPhoto
@@ -130,6 +138,30 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
               <Gallery listing={listing} />
             )}
           </div>
+
+          {listing.photos && listing.photos.length > 1 && (
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+              {listing.photos.slice(1).map((photo) => (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  key={photo}
+                  src={photo}
+                  alt={listingTitle(listing)}
+                  loading="lazy"
+                  className="aspect-[4/3] w-full rounded-xl object-cover ring-1 ring-slate-200"
+                />
+              ))}
+            </div>
+          )}
+          {listing.preview && (
+            <p className="mt-3 text-sm text-slate-500">
+              {listing.preview.kind === "generated" && "Фото сделаны ИИ по видео продавца, настоящие кадры смотрите в его посте. "}
+              {listing.preview.kind === "outpaint" && "Края обложки дорисованы ИИ, сама машина с фото продавца. "}
+              {listing.preview.priceSource === "voice" &&
+                `Цена взята из видео со слов продавца${listing.preview.priceApprox ? ", приблизительно" : ""}. `}
+              {listing.preview.priceSource === "overlay" && "Цена взята из надписи на видео. "}
+            </p>
+          )}
 
           <h2 className="mt-8 mb-3 text-xl font-bold">Характеристики</h2>
           {specs.length > 0 ? (
@@ -189,7 +221,7 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
                 <ul className="mt-1 space-y-0.5">
                   {listing.alsoAt.map((place) => (
                     <li key={place.url}>
-                      <a href={place.url} target="_blank" rel="noopener noreferrer" className="text-sky-600 hover:underline">
+                      <a href={place.url} target="_blank" rel="noopener noreferrer" className="text-brand-700 hover:underline">
                         {place.account}
                       </a>
                       {place.price !== undefined && `: ${formatPrice(place.price, "USD")}`}
@@ -202,7 +234,7 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
               <p className="mt-1 text-sm text-slate-500">Продавец не указал цену в посте, уточняйте у него.</p>
             )}
             {listing.downPayment !== undefined && (
-              <p className="mt-2 text-sm font-medium text-emerald-700">
+              <p className="mt-2 text-sm font-medium text-slate-800">
                 В рассрочку, первый взнос от {formatPrice(listing.downPayment, "USD")}
               </p>
             )}
@@ -210,7 +242,7 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
             {listing.seller && (
               <>
                 <div className="mt-5 flex items-center gap-3">
-                  <div className="flex size-11 items-center justify-center rounded-full bg-emerald-100 text-lg font-bold text-emerald-700">
+                  <div className="flex size-11 items-center justify-center rounded-full bg-slate-100 text-lg font-bold text-slate-800">
                     {listing.seller.name[0]}
                   </div>
                   <div>
@@ -220,7 +252,7 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
                 </div>
                 <a
                   href={`tel:${listing.seller.phone.replace(/[^\d+]/g, "")}`}
-                  className="mt-5 block rounded-xl bg-emerald-600 px-4 py-3 text-center font-semibold text-white hover:bg-emerald-700"
+                  className="mt-5 block rounded-xl bg-brand-600 px-4 py-3 text-center font-semibold text-white hover:bg-brand-700"
                 >
                   {listing.seller.phone}
                 </a>
@@ -238,15 +270,13 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
                   href={listing.source.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className={`mt-4 block rounded-xl px-4 py-3 text-center font-semibold text-white hover:opacity-90 ${
-                    listing.source.platform === "telegram" ? "bg-sky-500" : "bg-gradient-to-r from-fuchsia-600 to-orange-500"
-                  }`}
+                  className="mt-4 block rounded-xl bg-brand-600 px-4 py-3 text-center font-semibold text-white hover:bg-brand-700"
                 >
                   Открыть в {SOURCE_LABELS[listing.source.platform]} ↗
                 </a>
                 <Link
                   href={`/cars?seller=${encodeURIComponent(listing.source.account)}`}
-                  className="mt-2 block rounded-xl px-4 py-3 text-center text-sm font-semibold text-emerald-700 ring-1 ring-emerald-200 hover:bg-emerald-50"
+                  className="mt-2 block rounded-xl px-4 py-3 text-center text-sm font-semibold text-slate-900 ring-1 ring-slate-300 hover:bg-slate-50"
                 >
                   Все объявления продавца ({countSellerListings(listing.source.account)})
                 </Link>
@@ -266,7 +296,7 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
             <h2 className="text-xl font-bold">Похожие объявления</h2>
             <Link
               href={`/cars?brand=${encodeURIComponent(listing.brand)}&model=${encodeURIComponent(listing.model)}`}
-              className="text-sm font-medium text-emerald-700 hover:underline"
+              className="text-sm font-medium text-brand-700 hover:underline"
             >
               Все {listing.brand} {listing.model}
             </Link>

@@ -33,6 +33,9 @@ ONLY_CITY = "Ташкент"  # пока работаем с одним горо
 CROSS_SELLER_DAYS = 60  # разные продавцы: посты про одну машину не дальше друг от друга
 # Пары «похоже на одну машину у разных продавцов», которые автоматом не склеены: для ручной проверки
 CROSS_SELLER_CANDIDATES_FILE = PARSER_DIR / "data" / "cross_seller_candidates.json"
+# Ручные решения по этим парам из админки сайта (/admin/review): {"id1|id2": "same" или "different"}.
+# same: склеить в одну карточку, different: больше не предлагать. Ключ: два id по алфавиту через «|».
+PAIR_DECISIONS_FILE = PARSER_DIR / "data" / "pair_decisions.json"
 # Разбор постов языковой моделью: {shortcode: {brand, model, year, mileage_km, is_sold, is_listing, note}}.
 # Если пост там есть, его поля важнее регулярок ниже. Постов, которых там нет, регулярки разбирают как раньше.
 LLM_PARSED_FILE = PARSER_DIR / "data" / "llm_parsed.json"
@@ -380,6 +383,25 @@ def add_sellers(listings: list[dict]) -> tuple[list[dict], int, int]:
     return kept, dropped, other_city
 
 
+def load_pair_decisions() -> dict:
+    if not PAIR_DECISIONS_FILE.exists():
+        return {}
+    return json.loads(PAIR_DECISIONS_FILE.read_text(encoding="utf-8"))
+
+
+def pair_decision(decisions: dict, first: dict, second: dict) -> str | None:
+    """Ручное решение по паре объявлений. Учитывает и прошлые посты той же машины (duplicate_ids):
+    после перепоста id карточки меняется, а решение должно остаться."""
+    if not decisions:
+        return None
+    for first_id in [first["id"], *first["duplicate_ids"]]:
+        for second_id in [second["id"], *second["duplicate_ids"]]:
+            decision = decisions.get("|".join(sorted([first_id, second_id])))
+            if decision:
+                return decision
+    return None
+
+
 def merge_across_sellers(listings: list[dict]) -> tuple[list[dict], int, list[dict]]:
     """Одна машина у разных продавцов (чаще всего агрегатор перепечатал чужое объявление).
 
@@ -387,6 +409,7 @@ def merge_across_sellers(listings: list[dict]) -> tuple[list[dict], int, list[di
     Склеиваем сами, только если есть подтверждение: общий телефон в постах, одинаковый текст
     или это один и тот же продавец (его пост и перепечатка у агрегатора).
     Остальные пары уходят в список для ручной проверки и на сайте остаются отдельными карточками.
+    Ручное решение из админки (pair_decisions.json) важнее: «same» склеивает пару, «different» убирает из списка.
     Возвращает (объявления, сколько карточек убрано, непроверенные пары).
     """
     groups: dict[tuple, list[dict]] = {}
@@ -394,6 +417,7 @@ def merge_across_sellers(listings: list[dict]) -> tuple[list[dict], int, list[di
         if item["brand"] and item["model"] and item["year"] and item["mileage_km"]:
             groups.setdefault((item["brand"].lower(), item["model"].lower(), item["year"], item["mileage_km"]), []).append(item)
     removed_ids, candidates = set(), []
+    decisions = load_pair_decisions()
     for group in groups.values():
         if len({item["source_account"] for item in group}) < 2:
             continue
@@ -412,7 +436,10 @@ def merge_across_sellers(listings: list[dict]) -> tuple[list[dict], int, list[di
                 same_text = len(first) >= 30 and first == second
                 # Агрегатор перепечатал машину продавца, которого мы знаем по телефону
                 same_seller = main["seller_id"] == other["seller_id"]
-                if not (same_phone or same_text or same_seller):
+                decision = pair_decision(decisions, main, other)
+                if decision == "different":
+                    continue
+                if not (same_phone or same_text or same_seller or decision == "same"):
                     candidates.append({
                         "car": f"{main['brand']} {main['model']} {main['year']}, {main['mileage_km']} км",
                         "first": {"id": main["id"], "account": main["source_account"], "price": main["price"], "url": main["source_url"]},

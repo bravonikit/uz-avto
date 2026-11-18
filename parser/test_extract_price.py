@@ -144,5 +144,28 @@ class NewFormatsTest(unittest.TestCase):
         self.assertTrue(is_announcement(""))
 
 
+class NotCarSumTest(unittest.TestCase):
+    """18.11.2026: сумма растаможки, аренды и взноса кириллицей не должна становиться ценой машины."""
+
+    def test_customs_fee_is_not_price(self):
+        self.assertEqual(main_price("Zeekr 7X Ultra 103kw 48500$ Cip tashkent\nRastamojka 8500$+-"), 48500)
+
+    def test_rent_is_not_price(self):
+        self.assertEqual(main_price("Malibu 2 2.4\n2019 yil\n17.500$\nArendaga 5.500$ bilan"), 17500)
+
+    def test_cyrillic_down_payment_only(self):
+        self.assertIsNone(main_price("Tracker LTZ Plus 2024\nNasiya savdo:\n12 ой 927$\nбошига 5.000$"))
+
+    def test_price_next_to_down_payment(self):
+        self.assertEqual(main_price("Lacetti\nНахтга 6500$\nНасияга Бошига 2500$"), 6500)
+
+    def test_price_with_customs_included_stays(self):
+        self.assertEqual(main_price("G 63 AMG\nЦена с Растаможкой: 335,000 $"), 335000)
+        self.assertEqual(main_price("Taycan\n💰 Стоимость без растаможки: $140 000"), 140000)
+
+    def test_one_line_post_keeps_price(self):
+        self.assertEqual(main_price("▪️Malibu 2 ▪️2022 💸 Narxi - 26.900$ 📝 бошига 8.000$ боса насия"), 26900)
+
+
 if __name__ == "__main__":
     unittest.main()

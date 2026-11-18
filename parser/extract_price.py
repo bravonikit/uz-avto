@@ -54,9 +54,18 @@ SOFT_SKIP_LINE = re.compile(
     re.IGNORECASE,
 )
 HAS_KEYWORD = re.compile(KEYWORD, re.IGNORECASE)
+# Сумма сразу после слова «растаможка», «аренда» или кириллического «бошига»: это не цена машины (18.11.2026).
+# Вырезаем только саму сумму, а не строку: у части каналов весь пост идёт одной строкой.
+#   "Zeekr 7X 48500$ Cip tashkent / Rastamojka 8500$+-" давало цену 8500,
+#   "17.500$ / Arendaga 5.500$ bilan" давало 5500, "бошига 5.000$" давало 5000.
+NOT_CAR_SUM = re.compile(
+    r"(?:rastamo[jz]ka\b|(?<!без )растаможк[аиу]\b|arenda\w*|аренд\w*|ijara\w*|ижара\w*|бошига|бошланг\w*|бошланғ\w*)"
+    r"[^\d\n]{0,15}\$?\s*\d[\d .,'’]*\s*(?:\$|💰|💵|💲|usd|y\.?\s?e\b|у\.?\s?е\b)?",
+    re.IGNORECASE,
+)
 
 # Первый взнос: "Boshiga 19.000$", "Boshlang‘ich to‘lov: 4.000$", "Первоначальный взнос — 6800$"
-DOWN_LINE = re.compile(r"boshlang|boshiga|первоначальн|предоплат|взнос", re.IGNORECASE)
+DOWN_LINE = re.compile(r"boshlang|boshiga|бошланг|бошланғ|бошига|первоначальн|предоплат|взнос", re.IGNORECASE)
 DOWN_NUM = re.compile(r"(?<![\d.,])(\d{1,3}(?:[ .,'’]\d{3})+|\d{3,7})\s*\$|\$\s*(\d{1,3}(?:[ .,'’]\d{3})+|\d{3,7})(?!\d)")
 MIN_DOWN_PAYMENT = 100
 
@@ -82,6 +91,7 @@ def find_prices(text: str) -> list[int]:
     """Все разные цены из текста в USD, в порядке появления."""
     prices: list[int] = []
     for line in text.splitlines():
+        line = NOT_CAR_SUM.sub(" ", line)
         if skip_line(line):
             continue
         for pattern in PRICE_PATTERNS:
@@ -101,6 +111,7 @@ def main_price(text: str) -> int | None:
     """
     keyword_prices = []
     for line in text.splitlines():
+        line = NOT_CAR_SUM.sub(" ", line)
         if skip_line(line):
             continue
         for match in PRICE_PATTERNS[0].finditer(line):
@@ -111,7 +122,13 @@ def main_price(text: str) -> int | None:
         return keyword_prices[0]
     # Пост про рассрочку ("Boshiga 26.000$") без слова «цена»: оставшиеся суммы
     # почти всегда цены опций, а не машины. Лучше «цена по запросу», чем неверная цена.
-    if find_down_payment(text) is not None:
+    down = find_down_payment(text)
+    if down is not None:
+        # Исключение: рядом со взносом стоит одна сумма больше него ("💵22000$" и "бошига 8000$",
+        # "Нахтга 6500$" и "Бошига 2500$"): это цена машины. Несколько близких сумм (цены по цветам): берём меньшую.
+        bigger = [price for price in find_prices(text) if price > down]
+        if bigger and max(bigger) <= min(bigger) * 1.1:
+            return min(bigger)
         return None
     prices = find_prices(text)
     return min(prices) if prices else None

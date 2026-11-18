@@ -8,7 +8,7 @@ export default function NotFound() {
       <p className="mt-2 text-slate-500">Возможно, объявление уже снято с продажи.</p>
       <Link
         href="/cars"
-        className="mt-6 inline-block rounded-xl bg-emerald-600 px-5 py-2.5 font-semibold text-white hover:bg-emerald-700"
+        className="mt-6 inline-block rounded-xl bg-brand-600 px-5 py-2.5 font-semibold text-white hover:bg-brand-700"
       >
         К объявлениям
       </Link>

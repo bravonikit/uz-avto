@@ -3,6 +3,8 @@
 // а остальной код почти не изменится: страницы зовут только функции ниже.
 
 import instagramPosts from "@/data/instagram-listings.json";
+import channelPhotoQuality from "@/data/channel-photo-quality.json";
+import previewOverlay from "@/data/preview-overlay.json";
 import type { BODY_TYPES, DRIVES, FUEL_TYPES, TRANSMISSIONS } from "./catalog";
 import { parseNumber } from "./format";
 
@@ -25,11 +27,31 @@ export const PRICE_TYPE_LABELS: Record<PriceType, string> = {
   no_customs: "Без растаможки",
 };
 
+// Качество фото канала (src/data/channel-photo-quality.json):
+// good хорошие фото, video у продавца только видео, bad плохие фото (цена или баннер поверх машины),
+// mixed смешанные, unknown канал ещё не проверен.
+export type PhotoQuality = "good" | "video" | "bad" | "mixed" | "unknown";
+
+// Пометка на странице объявления. У хороших фото пометки нет.
+export const PHOTO_QUALITY_NOTES: Record<Exclude<PhotoQuality, "good">, string> = {
+  video: "Взято из Telegram: у продавца только видео, вместо фото кадр из ролика",
+  bad: "Взято из Telegram: плохие фото (цена или баннер поверх машины)",
+  mixed: "Взято из Telegram: фото разного качества, не проверены",
+  unknown: "Качество фото этого продавца ещё не проверено",
+};
+
+const CHANNEL_PHOTO_QUALITY = channelPhotoQuality.channels as Record<string, string>;
+
+function photoQualityOf(platform: string, account: string): PhotoQuality {
+  const value = platform === "telegram" ? CHANNEL_PHOTO_QUALITY[account] : undefined;
+  return value === "good" || value === "video" || value === "bad" || value === "mixed" ? value : "unknown";
+}
+
 const FUELS: readonly string[] = ["Бензин", "Газ/бензин", "Дизель", "Гибрид", "Электро"];
 
 // Тестовый курс, чтобы фильтр по цене в сумах работал и для цен в долларах
 export const MARKET_LABELS = { below: "Ниже рынка", fair: "Цена в рынке", above: "Выше рынка" } as const;
-export const MARKET_COLORS = { below: "text-emerald-700", fair: "text-slate-500", above: "text-rose-600" } as const;
+export const MARKET_COLORS = { below: "text-emerald-700", fair: "text-slate-500", above: "text-slate-700" } as const;
 export const LIQUIDITY_LABELS = { high: "Продаётся быстро", medium: "Продаётся средне", low: "Продаётся медленно" } as const;
 
 export const USD_TO_UZS = 12_500;
@@ -62,6 +84,10 @@ export type Listing = {
   market?: { price: number; low: number; high: number; count: number; label: "below" | "fair" | "above" };
   liquidity?: "high" | "medium" | "low"; // как быстро продаётся эта модель, по отметкам «продано»
   alsoAt?: { account: string; url: string; price?: number }[]; // эта же машина в других каналах
+  photos?: string[]; // все фото карточки по порядку, первое это обложка (пока только в режиме «стало»)
+  // Режим «стало»: что в этой карточке сделал новый конвейер (parser/_batch_day.py)
+  preview?: { kind: "crop" | "outpaint" | "generated"; priceSource?: "voice" | "overlay"; priceApprox?: boolean };
+  photoQuality: PhotoQuality; // качество фото канала, от него зависят пометка и место в выдаче
   isSold?: boolean; // продавец пометил пост как проданный ("BARAKA BOLDI", "ПРОДАНО")
   createdAt: string;
 };
@@ -102,11 +128,48 @@ const INSTAGRAM_LISTINGS: Listing[] = instagramPosts.map((post) => ({
     url: post.source_url,
     platform: post.source === "telegram" ? "telegram" : "instagram",
   },
+  photoQuality: photoQualityOf(post.source, post.source_account),
   isSold: post.is_sold,
   createdAt: post.date,
 }));
 
-const LISTINGS: Listing[] = INSTAGRAM_LISTINGS;
+// Сравнение «было и стало». Обычный сайт (npm run dev) показывает объявления как есть.
+// Второй сайт (npm run dev:new, порт 3001) поверх тех же данных подставляет результат пробы нового конвейера
+// из src/data/preview-overlay.json: новые обложки, фото из видео, цену и пробег из ролика.
+export const IS_PREVIEW = process.env.NEXT_PUBLIC_PREVIEW === "1";
+export const PREVIEW_DAY: string | null = IS_PREVIEW ? ((previewOverlay as { day: string | null }).day ?? null) : null;
+
+type PreviewEntry = {
+  kind?: "crop" | "outpaint" | "generated";
+  cover?: string;
+  photos?: string[];
+  price?: number;
+  priceSource?: "voice" | "overlay";
+  priceApprox?: boolean;
+  year?: number;
+  mileage?: number;
+};
+const PREVIEW_LISTINGS = (IS_PREVIEW ? (previewOverlay as { listings: unknown }).listings : {}) as Record<string, PreviewEntry>;
+
+function applyPreview(listing: Listing): Listing {
+  const entry = PREVIEW_LISTINGS[listing.id];
+  if (!entry) return listing;
+  const takesPrice = listing.price === undefined && entry.price !== undefined;
+  return {
+    ...listing,
+    image: entry.cover ?? listing.image,
+    photos: entry.photos ?? listing.photos,
+    price: listing.price ?? entry.price,
+    year: listing.year ?? entry.year,
+    mileage: listing.mileage ?? entry.mileage,
+    photoQuality: entry.cover ? "good" : listing.photoQuality,
+    preview: entry.kind
+      ? { kind: entry.kind, priceSource: takesPrice ? entry.priceSource : undefined, priceApprox: takesPrice ? entry.priceApprox : undefined }
+      : undefined,
+  };
+}
+
+const LISTINGS: Listing[] = INSTAGRAM_LISTINGS.map(applyPreview);
 
 // "Zeekr 001 WE 100kWh, 2024" или "Chevrolet Cobalt, 2023"
 export function listingTitle(listing: Listing) {
@@ -162,6 +225,7 @@ export type ListingFilters = {
   yearTo?: number;
   seller?: string; // Instagram-аккаунт продавца: /cars?seller=moshinasale
   hideSold?: boolean; // не показывать проданные
+  day?: string; // только объявления за один день по Ташкенту: /cars?day=2026-11-16
   sort?: "new" | "cheap" | "expensive";
 };
 
@@ -184,22 +248,31 @@ export function filtersFromSearchParams(
     yearTo: parseNumber(params.yearTo),
     seller: text("seller"),
     hideSold: text("hideSold") === "1",
+    day: /^\d{4}-\d{2}-\d{2}$/.test(text("day") ?? "") ? text("day") : undefined,
     sort: sort === "cheap" || sort === "expensive" ? sort : "new",
   };
 }
 
+// День публикации по времени Ташкента (UTC+5): "2026-11-16". Так же считает parser/_batch_day.py.
+function tashkentDay(createdAt: string): string {
+  const time = Date.parse(createdAt);
+  return Number.isNaN(time) ? "" : new Date(time + 5 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
 // Цены сравниваются в сумах. Если задан фильтр по году или цене,
 // объявления без года или без цены не показываются — их значение неизвестно.
-export function searchListings(filters: ListingFilters = {}): Listing[] {
+// extra: объявления, поданные через кабинет продавца (src/lib/published.ts), они ищутся вместе с остальными.
+export function searchListings(filters: ListingFilters = {}, extra: Listing[] = []): Listing[] {
   const priceAtLeast = (car: Listing, min: number) => (priceInSum(car) ?? -Infinity) >= min;
   const priceAtMost = (car: Listing, max: number) => (priceInSum(car) ?? Infinity) <= max;
-  const found = LISTINGS.filter(
+  const found = [...extra, ...LISTINGS].filter(
     (car) =>
       (!filters.brand || car.brand === filters.brand) &&
       (!filters.model || car.model === filters.model) &&
       (!filters.city || car.city === filters.city) &&
       (!filters.seller || car.source?.account === filters.seller) &&
       (!filters.hideSold || !car.isSold) &&
+      (!filters.day || tashkentDay(car.createdAt) === filters.day) &&
       (filters.priceFrom === undefined || priceAtLeast(car, filters.priceFrom)) &&
       (filters.priceTo === undefined || priceAtMost(car, filters.priceTo)) &&
       (filters.yearFrom === undefined || (car.year !== undefined && car.year >= filters.yearFrom)) &&
@@ -209,6 +282,12 @@ export function searchListings(filters: ListingFilters = {}): Listing[] {
   return found.sort((a, b) => {
     // Проданные всегда в конце списка, при любой сортировке
     if (Boolean(a.isSold) !== Boolean(b.isSold)) return a.isSold ? 1 : -1;
+    // В ленте «сначала новые» объявления с хорошими фото идут выше остальных (но все они выше проданных).
+    // При сортировке по цене порядок задаёт только цена.
+    if (filters.sort !== "cheap" && filters.sort !== "expensive" && !a.isSold) {
+      const tier = (car: Listing) => (car.photoQuality === "good" ? 0 : 1);
+      if (tier(a) !== tier(b)) return tier(a) - tier(b);
+    }
     // При сортировке по цене объявления без цены идут в конце
     if (filters.sort === "cheap") return (priceInSum(a) ?? Infinity) - (priceInSum(b) ?? Infinity);
     if (filters.sort === "expensive") return (priceInSum(b) ?? -Infinity) - (priceInSum(a) ?? -Infinity);
@@ -253,6 +332,24 @@ export function getSimilarListings(listing: Listing, limit = 4): Listing[] {
       (listing.year === undefined || car.year === undefined || Math.abs(car.year - listing.year) <= SIMILAR_YEARS),
   )
     .sort((a, b) => distance(a) - distance(b))
+    .slice(0, limit);
+}
+
+// Telegram каналы, из которых есть объявления: для страницы /admin/channel
+export function getTelegramChannels(): { account: string; count: number }[] {
+  const counts: Record<string, number> = {};
+  for (const car of LISTINGS) {
+    if (car.source?.platform === "telegram") counts[car.source.account] = (counts[car.source.account] ?? 0) + 1;
+  }
+  return Object.entries(counts)
+    .map(([account, count]) => ({ account, count }))
+    .sort((a, b) => a.account.localeCompare(b.account));
+}
+
+// Последние объявления одного Telegram канала, свежие первыми
+export function getChannelLatest(account: string, limit = 3): Listing[] {
+  return LISTINGS.filter((car) => car.source?.platform === "telegram" && car.source.account === account)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, limit);
 }
 
