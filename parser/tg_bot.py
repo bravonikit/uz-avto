@@ -24,7 +24,7 @@
 
 Без токена все команды молча ничего не делают: прогон парсера от бота не зависит.
 Постинг картинок дня в канал делает сайт: кнопка «Опубликовать в канал» в /admin/daily.
-Только стандартная библиотека Python: бот работает, даже если в .venv чего то не хватает.
+Сеть через requests (как весь парсер); без него стандартный urllib.
 """
 
 from __future__ import annotations
@@ -71,15 +71,29 @@ def set_env(key: str, value: str) -> None:
 
 
 def call(token: str, method: str, **payload):
-    request = urllib.request.Request(
-        f"https://api.telegram.org/bot{token}/{method}",
-        data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"},
-    )
+    """Запрос к Telegram. Через requests, как весь парсер: у него свои сертификаты (certifi).
+    Python с python.org на Маке системных сертификатов не видит, и голый urllib падает на SSL.
+    Нет requests: urllib с сертификатами certifi, если он есть."""
+    url = f"https://api.telegram.org/bot{token}/{method}"
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            data = json.loads(response.read())
-    except urllib.error.HTTPError as error:
-        data = json.loads(error.read() or b"{}")
+        import requests
+    except ImportError:
+        requests = None
+    if requests is not None:
+        data = requests.post(url, json=payload, timeout=30).json()
+    else:
+        import ssl
+        try:
+            import certifi
+            context = ssl.create_default_context(cafile=certifi.where())
+        except ImportError:
+            context = ssl.create_default_context()
+        request = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=30, context=context) as response:
+                data = json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            data = json.loads(error.read() or b"{}")
     if not data.get("ok"):
         raise RuntimeError(data.get("description") or "Telegram не ответил")
     return data["result"]
