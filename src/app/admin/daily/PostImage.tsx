@@ -235,7 +235,13 @@ export function PostImage(props: Props) {
   const [sentUrl, setSentUrl] = useState<string | undefined>(published?.url);
 
   useEffect(() => {
-    if (canvasRef.current) void draw(canvasRef.current, { layout, kicker, title, footer, date, items, fileName });
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    // data-ready: картинка дорисована (фото загружены). По нему автопостинг parser/post_daily.py ждёт холст
+    delete canvas.dataset.ready;
+    void draw(canvas, { layout, kicker, title, footer, date, items, fileName }).then(() => {
+      canvas.dataset.ready = "1";
+    });
   }, [layout, kicker, title, footer, date, items, fileName]);
 
   const toBlob = () =>

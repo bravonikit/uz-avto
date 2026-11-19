@@ -145,7 +145,7 @@ async function Daily({ searchParams }: Props) {
 
   return (
     <>
-      <div className="mb-6 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+      <div className="mb-6 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200" data-day={day}>
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <h2 className="text-xl font-bold">Аналитика за {formatDate(day)}</h2>
           <span className="text-sm text-slate-500">
@@ -281,7 +281,7 @@ type PostProps = {
 
 function Post({ layout, image, fileName, day, title, note, listings, text, empty, children, channel, sent }: PostProps) {
   return (
-    <section>
+    <section data-post={fileName.replace(/\.png$/, "")} data-sent={sent[fileName.replace(/\.png$/, "")] ? "1" : undefined}>
       <h3 className="text-lg font-bold">{title}</h3>
       <p className="mt-1 mb-4 text-sm text-slate-500">{note}</p>
       {children}

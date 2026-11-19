@@ -67,3 +67,4 @@ next-env.d.ts
 /public/cards/
 /src/data/cards-overlay.json
 /.next-preview/
+/.next-posts/
