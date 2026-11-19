@@ -80,7 +80,7 @@ def call(token: str, method: str, **payload):
     except ImportError:
         requests = None
     if requests is not None:
-        data = requests.post(url, json=payload, timeout=30).json()
+        data = requests.post(url, json=payload, timeout=60).json()
     else:
         import ssl
         try:
@@ -90,7 +90,7 @@ def call(token: str, method: str, **payload):
             context = ssl.create_default_context()
         request = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(request, timeout=30, context=context) as response:
+            with urllib.request.urlopen(request, timeout=60, context=context) as response:
                 data = json.loads(response.read())
         except urllib.error.HTTPError as error:
             data = json.loads(error.read() or b"{}")
@@ -121,15 +121,36 @@ def setup() -> None:
         raise SystemExit("В parser/.env нет TG_BOT_TOKEN. Создайте бота у @BotFather и добавьте строку TG_BOT_TOKEN=...")
     me = call(token, "getMe")
     print(f"Бот: @{me['username']}")
-    updates = call(token, "getUpdates", allowed_updates=["message", "channel_post", "my_chat_member"])
+    hook = call(token, "getWebhookInfo")
+    if hook.get("url"):
+        print(f"У бота стоит вебхук {hook['url']}: снимаю, иначе сообщения боту не видны")
+        call(token, "deleteWebhook")
+
     private = channel = None
-    for update in updates:
-        for kind in ("message", "channel_post", "my_chat_member"):
-            chat = (update.get(kind) or {}).get("chat")
-            if chat and chat["type"] == "private":
-                private = chat
-            elif chat and chat["type"] == "channel":
-                channel = chat
+
+    def scan(updates) -> None:
+        nonlocal private, channel
+        for update in updates:
+            for kind in ("message", "edited_message", "channel_post", "my_chat_member"):
+                chat = (update.get(kind) or {}).get("chat")
+                if chat and chat["type"] == "private":
+                    private = chat
+                elif chat and chat["type"] == "channel":
+                    channel = chat
+
+    updates = call(token, "getUpdates")
+    print(f"Сообщений боту в очереди: {len(updates)}")
+    scan(updates)
+    if not private and not env.get("TG_ALERT_CHAT_ID"):
+        # Ждём свежее сообщение: напишите боту что угодно прямо сейчас
+        print(f"Напишите боту @{me['username']} любое сообщение, жду до 60 секунд…")
+        deadline = time.time() + 60
+        offset = updates[-1]["update_id"] + 1 if updates else None
+        while not private and time.time() < deadline:
+            batch = call(token, "getUpdates", timeout=20, **({"offset": offset} if offset else {}))
+            scan(batch)
+            if batch:
+                offset = batch[-1]["update_id"] + 1
     if private:
         set_env("TG_ALERT_CHAT_ID", str(private["id"]))
         print(f"Уведомления: чат с {private.get('first_name', '')} ({private['id']}) записан в .env")
