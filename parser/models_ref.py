@@ -19,7 +19,9 @@ status:
 """
 from __future__ import annotations
 
+import difflib
 import re
+from collections import Counter
 
 # Кириллица, похожая на латиницу: "Sаntafe", "IХ3", "С16" пишут вперемешку
 LOOKALIKE = str.maketrans("аеорсхукмтвн", "aeopcxykmtbh")
@@ -172,7 +174,7 @@ MODELS: dict[str, list[tuple[str, str, dict]]] = {
                                              by_year=[(2010, 2017, "1"), (2018, 2030, "2")])),
         ("Gentra", r"gentra|jentra|жентра|джентра", M()),
         ("Lacetti", r"lacetti|lachetti|ласетти|лачетти", M()),
-        ("Cobalt", r"cobalt|kobalt|кобальт", M()),
+        ("Cobalt", r"cobalt|kobalt|koblt|кобальт", M()),
         ("Spark", r"spark|спарк", M()),
         ("Nexia", r"nexia|neksiya|nexiya|нексия|nexia\W*r3", M(gen=r"ne(?:x|ks)iy?a\W*r?([123])\b", gen_words=[(r"ravon|\br3\b", "3")],
                                                          by_year=[(1995, 2008, "1"), (2008, 2016, "2"), (2016, 2030, "3")])),
@@ -647,3 +649,70 @@ def model_key(n: dict) -> str | None:
         return None
     parts = [n["brand"], n["model"]] + ([n["generation"]] if n.get("generation") else [])
     return " ".join(parts)
+
+
+SOURCE_LABEL = {"model": "из названия", "title": "из заголовка", "text": "из текста поста"}
+
+
+def suggest(brand: str | None, model: str | None, title: str | None = None, year: int | None = None,
+            description: str | None = None, limit: int = 4) -> list[dict]:
+    """Подсказки для ручного разбора: самые подходящие модели из названия, заголовка и текста поста.
+
+    Ищем точные совпадения по справочнику и похожие слова (опечатки). Выше те, что нашлись в названии
+    из разбора, потом в заголовке, потом в тексте; марка из разбора даёт небольшой плюс.
+    """
+    head = "\n".join((description or "").splitlines()[:3])
+    base = canon_brand(brand)
+    found: dict[tuple[str, str], dict] = {}
+
+    def add(b: str, name: str, source: str, score: float) -> None:
+        key = (b, name)
+        if key not in found or found[key]["score"] < score:
+            found[key] = {"brand": b, "model": name, "source": SOURCE_LABEL[source], "score": round(score, 2)}
+
+    for weight, (source, text) in zip((3, 2, 1), (("model", model), ("title", title), ("text", head))):
+        if not (text or "").strip():
+            continue
+        variants = _variants(text)
+        named = {b for b, rx in _brand_re.items() if any(rx.search(v) for v in variants)}
+        for b in named | ({base} if base in MODELS else set()):
+            bonus = (0.5 if b == base else 0) + (0.5 if b in named else 0)
+            stripped = _variants(_strip_brand(b, text))
+            for name, rx, _ in _model_re.get(b, []):
+                if any(rx.search(v) for v in stripped):
+                    add(b, name, source, weight + bonus)
+            names = {n.lower(): n for n, _, _ in _model_re.get(b, [])}
+            words = Counter(w for n in names for w in set(n.split()))
+            common = {w for w, k in words.items() if k > 1}
+            for token in re.findall(r"[a-zа-я0-9]{3,}", stripped[-1]):
+                if token in common:
+                    continue
+                for close in difflib.get_close_matches(token, list(names), n=2, cutoff=0.75):
+                    add(b, names[close], source, weight * 0.7 + bonus)
+        # Узнаваемые модели других марок без названия марки: «Malibu 2 Premier» в посте, записанном как Lixiang
+        for b, rx in _distinct_re.items():
+            if b not in named and b != base and any(rx.search(v) for v in variants):
+                if True:
+                    hit = find_model(b, text)
+                    if hit:
+                        add(b, hit[0], source, weight * 0.8)
+
+    result = sorted(found.values(), key=lambda c: -c["score"])[:limit]
+    for c in result:
+        n = normalize(c["brand"], c["model"], title, year, None)
+        c["generation"] = n["generation"] if n["model"] == c["model"] else None
+    return result
+
+
+def all_models() -> dict[str, list[str]]:
+    """Справочник для выпадающих списков в админке: марка -> модели."""
+    out: dict[str, list[str]] = {}
+    for brand in BRANDS:
+        names: list[str] = []
+        for name, _, extra in MODELS.get(brand, []):
+            gens = sorted({g for _, _, g in extra.get("by_year", [])}) if extra.get("gen") is not None else []
+            for full in ([f"{name} {g}" for g in gens] or [name]):
+                if full not in names:
+                    names.append(full)
+        out[brand] = names
+    return out

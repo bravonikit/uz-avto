@@ -4,13 +4,14 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-type Props = { waiting: number; review: number; showLogout: boolean; logout: () => Promise<void> };
+type Props = { waiting: number; review: number; models: number; showLogout: boolean; logout: () => Promise<void> };
 
-export function AdminNav({ waiting, review, showLogout, logout }: Props) {
+export function AdminNav({ waiting, review, models, showLogout, logout }: Props) {
   const pathname = usePathname();
   const tabs = [
     { href: "/admin", label: "Заявки", count: waiting },
     { href: "/admin/review", label: "Ручной разбор", count: review },
+    { href: "/admin/models", label: "Спорные модели", count: models },
     { href: "/admin/channel", label: "Канал", count: 0 },
     { href: "/admin/daily", label: "Аналитика дня", count: 0 },
   ];

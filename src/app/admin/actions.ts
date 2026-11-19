@@ -4,6 +4,7 @@
 import { refresh } from "next/cache";
 import { isAdmin, signInAdmin, signOutAdmin } from "@/lib/admin";
 import { parseNumber } from "@/lib/format";
+import { decideModel } from "@/lib/model-review";
 import { decidePair, decidePrice, getPriceQueue } from "@/lib/review";
 import { setSellerListingStatus } from "@/lib/seller-listings";
 import { publishToChannel } from "@/lib/telegram";
@@ -62,6 +63,25 @@ export async function decidePriceAction(formData: FormData) {
     const price = parseNumber(formData.get("price"));
     if (price && price >= 500 && price <= 5_000_000) await decidePrice(id, price);
   }
+  refresh();
+}
+
+// Спорная модель: выбрать подсказку, вписать свою, оставить как есть или скрыть объявление
+export async function decideModelAction(formData: FormData) {
+  if (!(await isAdmin())) return;
+  const id = formData.get("id");
+  const decision = formData.get("decision");
+  if (typeof id !== "string") return;
+  const clean = (value: FormDataEntryValue | null) => (typeof value === "string" ? value.trim().slice(0, 60) : "");
+  if (decision === "pick") {
+    const [brand, model] = clean(formData.get("car")).split("|");
+    if (brand && model) await decideModel(id, { brand, model });
+  } else if (decision === "manual") {
+    const brand = clean(formData.get("brand"));
+    const model = clean(formData.get("model"));
+    if (brand && model) await decideModel(id, { brand, model });
+  } else if (decision === "keep") await decideModel(id, { keep: true });
+  else if (decision === "hide") await decideModel(id, { hide: true });
   refresh();
 }
 

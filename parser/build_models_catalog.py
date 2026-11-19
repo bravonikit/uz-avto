@@ -5,7 +5,7 @@
 Читает src/data/instagram-listings.json (всё, что выгружено на сайт), прогоняет
 каждое объявление через models_ref.normalize и пишет:
     data/models_catalog.json   марка -> модели: сколько объявлений, как писали, есть ли на avtoelon
-    data/models_disputed.json  объявления, где модель не определена или спорит с текстом
+    data/models_disputed_report.json  спорные по сырым данным (очередь админки пишет apply_models.py)
     data/models_map.json       id объявления -> каноничная марка, модель, поколение
 """
 from __future__ import annotations
@@ -38,14 +38,18 @@ def main() -> None:
     status = Counter()
 
     for item in listings:
-        n = normalize(item.get("brand"), item.get("model"), item.get("title"), item.get("year"), item.get("description"))
+        # После подключения справочника на сайте уже исправленные марка и модель, сырые лежат в raw_*
+        raw_brand = item.get("raw_brand", item.get("brand"))
+        raw_model = item.get("raw_model", item.get("model"))
+        item = {**item, "brand": raw_brand, "model": raw_model}
+        n = normalize(raw_brand, raw_model, item.get("title"), item.get("year"), item.get("description"))
         status[n["status"]] += 1
         mapping[item["id"]] = {k: n[k] for k in ("brand", "model", "generation", "variant", "position", "kind", "status")}
         mapping[item["id"]]["key"] = model_key(n)
         if n["status"] == "disputed":
             disputed.append({
                 "id": item["id"], "url": item.get("source_url"), "reason": n["reason"],
-                "was": n["raw"], "brand": n["brand"], "model": n["model"], "suggest": n["suggest"], "year": item.get("year"),
+                "was": n["raw"], "brand": n["brand"], "model": n["model"], "suggest": n.get("suggest"), "year": item.get("year"),
                 "title": item.get("title"), "text": (item.get("description") or "")[:200],
             })
             continue
@@ -91,7 +95,7 @@ def main() -> None:
 
     (OUT / "models_catalog.json").write_text(json.dumps(
         {"brands": out, "only_on_avtoelon": missing}, ensure_ascii=False, indent=1))
-    (OUT / "models_disputed.json").write_text(json.dumps(disputed, ensure_ascii=False, indent=1))
+    (OUT / "models_disputed_report.json").write_text(json.dumps(disputed, ensure_ascii=False, indent=1))
     (OUT / "models_map.json").write_text(json.dumps(mapping, ensure_ascii=False))
 
     keys = Counter(v["key"] for v in mapping.values() if v["key"])

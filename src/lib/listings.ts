@@ -98,7 +98,10 @@ export type Listing = {
   createdAt: string;
 };
 
-const INSTAGRAM_LISTINGS: Listing[] = instagramPosts.map((post) => ({
+// Грузовые и мотоциклы (тип из справочника моделей parser/models_ref.py) в ленту легковых не берём
+const INSTAGRAM_LISTINGS: Listing[] = instagramPosts
+  .filter((post) => ((post as { kind?: string }).kind ?? "car") === "car")
+  .map((post) => ({
   id: post.id,
   brand: post.brand ?? "",
   model: post.model ?? "",

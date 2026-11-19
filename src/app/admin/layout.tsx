@@ -4,6 +4,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { adminMode, isAdmin } from "@/lib/admin";
+import { getModelQueue } from "@/lib/model-review";
 import { getPairQueue, getPriceQueue } from "@/lib/review";
 import { getAllSellerListings } from "@/lib/seller-listings";
 import { logout } from "./actions";
@@ -37,12 +38,18 @@ async function Gate({ children }: { children: React.ReactNode }) {
   }
   if (!(await isAdmin())) return <LoginForm />;
 
-  const [listings, pairs, prices] = await Promise.all([getAllSellerListings(), getPairQueue(), getPriceQueue()]);
+  const [listings, pairs, prices, models] = await Promise.all([
+    getAllSellerListings(),
+    getPairQueue(),
+    getPriceQueue(),
+    getModelQueue(),
+  ]);
   return (
     <>
       <AdminNav
         waiting={listings.filter((listing) => listing.status === "moderation").length}
         review={pairs.pairs.length + prices.suspects.length}
+        models={models.items.length}
         showLogout={mode === "password"}
         logout={logout}
       />
