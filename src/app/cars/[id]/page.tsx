@@ -7,8 +7,8 @@ import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { Freshness } from "@/components/Freshness";
 import { Gallery } from "@/components/Gallery";
+import { PhotoGallery } from "@/components/PhotoGallery";
 import { ListingCard } from "@/components/ListingCard";
-import { ListingPhoto } from "@/components/ListingPhoto";
 import { formatDate, formatMileage, formatPrice } from "@/lib/format";
 import {
   countSellerListings,
@@ -66,6 +66,8 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
   const similar = getSimilarListings(listing);
 
   // Показываем только характеристики, которые известны
+  // Все фото карточки для галереи: обложка первой, без повторов
+  const photos = [...new Set([listing.image, ...(listing.photos ?? [])].filter((photo): photo is string => Boolean(photo)))];
   const specs = (
     [
       ["Год выпуска", listing.year],
@@ -127,32 +129,9 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
           )}
 
           <div className="mt-5">
-            {listing.image ? (
-              <ListingPhoto
-                listing={listing}
-                sizes="(min-width: 1024px) 760px, 100vw"
-                priority
-                className="overflow-hidden rounded-2xl ring-1 ring-slate-200"
-              />
-            ) : (
-              <Gallery listing={listing} />
-            )}
+            {photos.length > 0 ? <PhotoGallery photos={photos} alt={listingTitle(listing)} /> : <Gallery listing={listing} />}
           </div>
 
-          {listing.photos && listing.photos.length > 1 && (
-            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
-              {listing.photos.slice(1).map((photo) => (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  key={photo}
-                  src={photo}
-                  alt={listingTitle(listing)}
-                  loading="lazy"
-                  className="aspect-[4/3] w-full rounded-xl object-cover ring-1 ring-slate-200"
-                />
-              ))}
-            </div>
-          )}
           {listing.preview && (
             <p className="mt-3 text-sm text-slate-500">
               {listing.preview.kind === "generated" && "Фото сделаны ИИ по видео продавца, настоящие кадры смотрите в его посте. "}
