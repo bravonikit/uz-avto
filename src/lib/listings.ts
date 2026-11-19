@@ -3,6 +3,10 @@
 // а остальной код почти не изменится: страницы зовут только функции ниже.
 
 import instagramPosts from "@/data/instagram-listings.json";
+import channelPhotoQuality from "@/data/channel-photo-quality.json";
+import previewOverlay from "@/data/preview-overlay.json";
+import cardsOverlay from "@/data/cards-overlay.json";
+import videoFramesOverlay from "@/data/video-frames-overlay.json";
 import type { BODY_TYPES, DRIVES, FUEL_TYPES, TRANSMISSIONS } from "./catalog";
 import { parseNumber } from "./format";
 
@@ -25,11 +29,31 @@ export const PRICE_TYPE_LABELS: Record<PriceType, string> = {
   no_customs: "Без растаможки",
 };
 
+// Качество фото канала (src/data/channel-photo-quality.json):
+// good хорошие фото, video у продавца только видео, bad плохие фото (цена или баннер поверх машины),
+// mixed смешанные, unknown канал ещё не проверен.
+export type PhotoQuality = "good" | "video" | "bad" | "mixed" | "unknown";
+
+// Пометка на странице объявления. У хороших фото пометки нет.
+export const PHOTO_QUALITY_NOTES: Record<Exclude<PhotoQuality, "good">, string> = {
+  video: "Взято из Telegram: у продавца только видео, вместо фото кадр из ролика",
+  bad: "Взято из Telegram: плохие фото (цена или баннер поверх машины)",
+  mixed: "Взято из Telegram: фото разного качества, не проверены",
+  unknown: "Качество фото этого продавца ещё не проверено",
+};
+
+const CHANNEL_PHOTO_QUALITY = channelPhotoQuality.channels as Record<string, string>;
+
+function photoQualityOf(platform: string, account: string): PhotoQuality {
+  const value = platform === "telegram" ? CHANNEL_PHOTO_QUALITY[account] : undefined;
+  return value === "good" || value === "video" || value === "bad" || value === "mixed" ? value : "unknown";
+}
+
 const FUELS: readonly string[] = ["Бензин", "Газ/бензин", "Дизель", "Гибрид", "Электро"];
 
 // Тестовый курс, чтобы фильтр по цене в сумах работал и для цен в долларах
 export const MARKET_LABELS = { below: "Ниже рынка", fair: "Цена в рынке", above: "Выше рынка" } as const;
-export const MARKET_COLORS = { below: "text-emerald-700", fair: "text-slate-500", above: "text-rose-600" } as const;
+export const MARKET_COLORS = { below: "text-emerald-700", fair: "text-slate-500", above: "text-slate-700" } as const;
 export const LIQUIDITY_LABELS = { high: "Продаётся быстро", medium: "Продаётся средне", low: "Продаётся медленно" } as const;
 
 export const USD_TO_UZS = 12_500;
@@ -62,11 +86,58 @@ export type Listing = {
   market?: { price: number; low: number; high: number; count: number; label: "below" | "fair" | "above" };
   liquidity?: "high" | "medium" | "low"; // как быстро продаётся эта модель, по отметкам «продано»
   alsoAt?: { account: string; url: string; price?: number }[]; // эта же машина в других каналах
+  photos?: string[]; // все фото карточки по порядку, первое это обложка (пока только в режиме «стало»)
+  // Режим «стало»: что в этой карточке сделал новый конвейер (parser/_batch_day.py)
+  preview?: { kind: "crop" | "outpaint" | "generated"; priceSource?: "voice" | "overlay"; priceApprox?: boolean };
+  summary?: string; // короткое описание на русском: пересказ текста поста (parser/cards_daily.py)
+  speech?: string; // пересказ того, что продавец говорит в ролике
+  transcript?: string; // всё, что сказано в ролике, дословно, на языке оригинала
+  transcriptLang?: "uz" | "ru" | "mixed"; // на каком языке говорит продавец
+  transcriptRu?: string; // перевод расшифровки на русский
+  transcriptUz?: string; // перевод расшифровки на узбекский, латиница
+  // Электромобили и гибриды (parser/ev_specs.py и price_fill.py): запас хода и батарея, если продавец их назвал
+  ev?: { powertrain?: "ev" | "hybrid"; rangeKm?: number; rangeTotalKm?: number; rangeNowKm?: number; batteryPct?: number };
+  priceFrom?: { source: "voice" | "image"; approx: boolean }; // цены нет в тексте: взята из голоса или с фото (price_fill.py)
+  priceOriginal?: { value: number; currency: "EUR" }; // продавец указал цену в евро, на сайте она в долларах
+  photoQuality: PhotoQuality; // качество фото канала, от него зависят пометка и место в выдаче
   isSold?: boolean; // продавец пометил пост как проданный ("BARAKA BOLDI", "ПРОДАНО")
+  soldAt?: string; // когда продана: известно, только если «продано» пришло отдельным постом
+  daysToSell?: number; // за сколько дней продана, от первой публикации
   createdAt: string;
 };
 
-const INSTAGRAM_LISTINGS: Listing[] = instagramPosts.map((post) => ({
+type EvFields = {
+  powertrain?: string | null;
+  range_km?: number | null;
+  range_total_km?: number | null;
+  range_now_km?: number | null;
+  battery_pct?: number | null;
+};
+
+function evOf(post: EvFields): Listing["ev"] {
+  const ev = {
+    powertrain: post.powertrain === "ev" || post.powertrain === "hybrid" ? (post.powertrain as "ev" | "hybrid") : undefined,
+    rangeKm: post.range_km ?? undefined,
+    rangeTotalKm: post.range_total_km ?? undefined,
+    rangeNowKm: post.range_now_km ?? undefined,
+    batteryPct: post.battery_pct ?? undefined,
+  };
+  return ev.rangeKm || ev.rangeTotalKm || ev.batteryPct ? ev : undefined;
+}
+
+// Запас хода одной строкой для карточки: "605 км хода" или у гибрида "150 км на электричестве"
+export function rangeText(listing: Listing): string | undefined {
+  const ev = listing.ev;
+  if (!ev) return undefined;
+  if (ev.rangeKm) return ev.powertrain === "hybrid" ? `${ev.rangeKm} км на электричестве` : `${ev.rangeKm} км хода`;
+  if (ev.rangeTotalKm) return `${ev.rangeTotalKm} км общий запас`;
+  return undefined;
+}
+
+// Грузовые и мотоциклы (тип из справочника моделей parser/models_ref.py) в ленту легковых не берём
+const INSTAGRAM_LISTINGS: Listing[] = instagramPosts
+  .filter((post) => ((post as { kind?: string }).kind ?? "car") === "car")
+  .map((post) => ({
   id: post.id,
   brand: post.brand ?? "",
   model: post.model ?? "",
@@ -102,11 +173,84 @@ const INSTAGRAM_LISTINGS: Listing[] = instagramPosts.map((post) => ({
     url: post.source_url,
     platform: post.source === "telegram" ? "telegram" : "instagram",
   },
+  photoQuality: photoQualityOf(post.source, post.source_account),
   isSold: post.is_sold,
+  // Этих полей нет в старых выгрузках и у Instagram, поэтому читаем их как необязательные
+  soldAt: (post as { sold_at?: string | null }).sold_at ?? undefined,
+  ev: evOf(post as EvFields),
+  priceFrom: (() => {
+    const source = (post as { price_source?: string | null }).price_source;
+    return source === "voice" || source === "image"
+      ? { source, approx: Boolean((post as { price_approx?: boolean | null }).price_approx) }
+      : undefined;
+  })(),
+  priceOriginal: (() => {
+    const original = (post as { price_original?: { value: number; currency: string } | null }).price_original;
+    return original?.currency === "EUR" ? { value: original.value, currency: "EUR" as const } : undefined;
+  })(),
+  daysToSell: (post as { days_to_sell?: number | null }).days_to_sell ?? undefined,
   createdAt: post.date,
 }));
 
-const LISTINGS: Listing[] = INSTAGRAM_LISTINGS;
+// Сравнение «было и стало». Обычный сайт (npm run dev) показывает объявления как есть.
+// Второй сайт (npm run dev:new, порт 3001) поверх тех же данных подставляет результат пробы нового конвейера
+// из src/data/preview-overlay.json: новые обложки, фото из видео, цену и пробег из ролика.
+export const IS_PREVIEW = process.env.NEXT_PUBLIC_PREVIEW === "1";
+export const PREVIEW_DAY: string | null = IS_PREVIEW ? ((previewOverlay as { day: string | null }).day ?? null) : null;
+
+type PreviewEntry = {
+  kind?: "crop" | "outpaint" | "generated";
+  cover?: string;
+  photos?: string[];
+  price?: number;
+  priceSource?: "voice" | "overlay";
+  priceApprox?: boolean;
+  year?: number;
+  mileage?: number;
+  description?: string;
+  speech?: string;
+  transcript?: string;
+  transcriptLang?: "uz" | "ru" | "mixed";
+  transcriptRu?: string;
+  transcriptUz?: string;
+};
+const PREVIEW_LISTINGS = (IS_PREVIEW ? (previewOverlay as { listings: unknown }).listings : {}) as Record<string, PreviewEntry>;
+// Постоянная обработка карточек (parser/cards_daily.py): обложки, фото из видео, цена и пробег из ролика, описания.
+// Подставляется всегда, на обоих сайтах. Проба «стало» идёт поверх неё.
+const CARD_LISTINGS = (cardsOverlay as { listings: unknown }).listings as Record<string, PreviewEntry>;
+
+// Бесплатные обложки из кадров ролика (parser/video_covers.py) для старых объявлений «только видео»:
+// вместо превью Telegram (часто лицо продавца) кадр, где машина видна целиком. Карточки cards_daily.py идут поверх.
+const FRAME_LISTINGS = (videoFramesOverlay as { listings: unknown }).listings as Record<string, PreviewEntry>;
+
+function applyPreview(listing: Listing): Listing {
+  return applyEntry(applyEntry(applyEntry(listing, FRAME_LISTINGS[listing.id]), CARD_LISTINGS[listing.id]), PREVIEW_LISTINGS[listing.id]);
+}
+
+function applyEntry(listing: Listing, entry: PreviewEntry | undefined): Listing {
+  if (!entry) return listing;
+  const takesPrice = listing.price === undefined && entry.price !== undefined;
+  return {
+    ...listing,
+    image: entry.cover ?? listing.image,
+    photos: entry.photos ?? listing.photos,
+    price: listing.price ?? entry.price,
+    year: listing.year ?? entry.year,
+    mileage: listing.mileage ?? entry.mileage,
+    photoQuality: entry.cover ? "good" : listing.photoQuality,
+    summary: entry.description ?? listing.summary,
+    speech: entry.speech ?? listing.speech,
+    transcript: entry.transcript ?? listing.transcript,
+    transcriptLang: entry.transcriptLang ?? listing.transcriptLang,
+    transcriptRu: entry.transcriptRu ?? listing.transcriptRu,
+    transcriptUz: entry.transcriptUz ?? listing.transcriptUz,
+    preview: entry.kind
+      ? { kind: entry.kind, priceSource: takesPrice ? entry.priceSource : undefined, priceApprox: takesPrice ? entry.priceApprox : undefined }
+      : listing.preview,
+  };
+}
+
+const LISTINGS: Listing[] = INSTAGRAM_LISTINGS.map(applyPreview);
 
 // "Zeekr 001 WE 100kWh, 2024" или "Chevrolet Cobalt, 2023"
 export function listingTitle(listing: Listing) {
@@ -162,6 +306,8 @@ export type ListingFilters = {
   yearTo?: number;
   seller?: string; // Instagram-аккаунт продавца: /cars?seller=moshinasale
   hideSold?: boolean; // не показывать проданные
+  day?: string; // только объявления за один день по Ташкенту: /cars?day=2026-11-16
+  processed?: boolean; // только обработанные карточки (обложка, фото из видео или описание): /cars?processed=1
   sort?: "new" | "cheap" | "expensive";
 };
 
@@ -184,22 +330,33 @@ export function filtersFromSearchParams(
     yearTo: parseNumber(params.yearTo),
     seller: text("seller"),
     hideSold: text("hideSold") === "1",
+    day: /^\d{4}-\d{2}-\d{2}$/.test(text("day") ?? "") ? text("day") : undefined,
+    processed: text("processed") === "1",
     sort: sort === "cheap" || sort === "expensive" ? sort : "new",
   };
 }
 
+// День публикации по времени Ташкента (UTC+5): "2026-11-16". Так же считает parser/_batch_day.py.
+function tashkentDay(createdAt: string): string {
+  const time = Date.parse(createdAt);
+  return Number.isNaN(time) ? "" : new Date(time + 5 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
 // Цены сравниваются в сумах. Если задан фильтр по году или цене,
 // объявления без года или без цены не показываются — их значение неизвестно.
-export function searchListings(filters: ListingFilters = {}): Listing[] {
+// extra: объявления, поданные через кабинет продавца (src/lib/published.ts), они ищутся вместе с остальными.
+export function searchListings(filters: ListingFilters = {}, extra: Listing[] = []): Listing[] {
   const priceAtLeast = (car: Listing, min: number) => (priceInSum(car) ?? -Infinity) >= min;
   const priceAtMost = (car: Listing, max: number) => (priceInSum(car) ?? Infinity) <= max;
-  const found = LISTINGS.filter(
+  const found = [...extra, ...LISTINGS].filter(
     (car) =>
       (!filters.brand || car.brand === filters.brand) &&
       (!filters.model || car.model === filters.model) &&
       (!filters.city || car.city === filters.city) &&
       (!filters.seller || car.source?.account === filters.seller) &&
       (!filters.hideSold || !car.isSold) &&
+      (!filters.day || tashkentDay(car.createdAt) === filters.day) &&
+      (!filters.processed || Boolean(car.preview?.kind)) &&
       (filters.priceFrom === undefined || priceAtLeast(car, filters.priceFrom)) &&
       (filters.priceTo === undefined || priceAtMost(car, filters.priceTo)) &&
       (filters.yearFrom === undefined || (car.year !== undefined && car.year >= filters.yearFrom)) &&
@@ -209,6 +366,14 @@ export function searchListings(filters: ListingFilters = {}): Listing[] {
   return found.sort((a, b) => {
     // Проданные всегда в конце списка, при любой сортировке
     if (Boolean(a.isSold) !== Boolean(b.isSold)) return a.isSold ? 1 : -1;
+    // В ленте «сначала новые»: выше всех объявления, обработанные через видео (4 фото из ролика и текст),
+    // потом с хорошими фото, потом остальные (но все они выше проданных). Решение Ника 19.11.2026.
+    // При сортировке по цене порядок задаёт только цена.
+    if (filters.sort !== "cheap" && filters.sort !== "expensive" && !a.isSold) {
+      const tier = (car: Listing) =>
+        car.preview?.kind === "generated" && (car.summary || car.speech) ? 0 : car.photoQuality === "good" ? 1 : 2;
+      if (tier(a) !== tier(b)) return tier(a) - tier(b);
+    }
     // При сортировке по цене объявления без цены идут в конце
     if (filters.sort === "cheap") return (priceInSum(a) ?? Infinity) - (priceInSum(b) ?? Infinity);
     if (filters.sort === "expensive") return (priceInSum(b) ?? -Infinity) - (priceInSum(a) ?? -Infinity);
@@ -256,10 +421,98 @@ export function getSimilarListings(listing: Listing, limit = 4): Listing[] {
     .slice(0, limit);
 }
 
+// Telegram каналы, из которых есть объявления: для страницы /admin/channel
+export function getTelegramChannels(): { account: string; count: number }[] {
+  const counts: Record<string, number> = {};
+  for (const car of LISTINGS) {
+    if (car.source?.platform === "telegram") counts[car.source.account] = (counts[car.source.account] ?? 0) + 1;
+  }
+  return Object.entries(counts)
+    .map(([account, count]) => ({ account, count }))
+    .sort((a, b) => a.account.localeCompare(b.account));
+}
+
+// Последние объявления одного Telegram канала, свежие первыми
+export function getChannelLatest(account: string, limit = 3): Listing[] {
+  return LISTINGS.filter((car) => car.source?.platform === "telegram" && car.source.account === account)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, limit);
+}
+
 export function getListing(id: string): Listing | undefined {
   return LISTINGS.find((car) => car.id === id);
 }
 
 export function getAllListingIds(): string[] {
   return LISTINGS.map((car) => car.id);
+}
+
+// ---------- Ежедневная аналитика: вкладка /admin/daily и два поста в Telegram канал
+
+// Дни (по Ташкенту), за которые есть хотя бы minCount объявлений, свежие первыми.
+// Неполный день (парсер ещё не прошёл) так отсекается сам.
+export function getListingDays(minCount = 10): string[] {
+  const counts: Record<string, number> = {};
+  for (const car of LISTINGS) {
+    const day = tashkentDay(car.createdAt);
+    if (day) counts[day] = (counts[day] ?? 0) + 1;
+  }
+  return Object.keys(counts)
+    .filter((day) => counts[day] >= minCount)
+    .sort((a, b) => b.localeCompare(a));
+}
+
+// Насколько цена ниже рыночной: 0.19 значит на 19% дешевле похожих машин
+export function marketDiscount(listing: Listing): number | undefined {
+  if (!listing.market || listing.price === undefined || listing.market.price <= 0) return undefined;
+  return 1 - listing.price / listing.market.price;
+}
+
+const DIGEST_MIN_SIMILAR = 8; // оценке рынка по меньшему числу похожих машин для поста не доверяем
+
+export type DailyDigest = {
+  day: string;
+  total: number; // объявлений за день
+  inStock: number; // в наличии и не проданы
+  withPrice: number;
+  belowMarket: number;
+  medianPrice?: number; // по машинам в наличии, USD
+  topBrands: { brand: string; count: number }[];
+  deals: Listing[]; // картинка «Ниже рынка»: самая большая выгода в долларах против похожих машин
+  best: Listing[]; // картинка «Самые красивые»: самые дорогие машины дня
+};
+
+// Что появилось за один день. В посты идут только машины в наличии, с ценой и фото, не проданные:
+// под заказ и CIP это не «предложение дня», а прайс.
+export function getDailyDigest(day: string, limit = 5): DailyDigest {
+  const todays = LISTINGS.filter((car) => tashkentDay(car.createdAt) === day);
+  const inStock = todays.filter((car) => !car.isSold && !car.priceType);
+  const priced = inStock.filter((car) => car.price !== undefined && car.currency === "USD");
+  const prices = priced.map((car) => car.price!).sort((a, b) => a - b);
+  const brands: Record<string, number> = {};
+  for (const car of inStock) if (car.brand) brands[car.brand] = (brands[car.brand] ?? 0) + 1;
+  const postable = priced.filter((car) => car.image && car.brand);
+  const deals = postable
+    .filter((car) => car.market?.label === "below" && car.market.count >= DIGEST_MIN_SIMILAR)
+    .sort((a, b) => b.market!.price - b.price! - (a.market!.price - a.price!)) // у кого больше выгода в долларах
+    .slice(0, limit);
+  const dealIds = new Set(deals.map((car) => car.id));
+  const best = postable
+    .filter((car) => !dealIds.has(car.id))
+    .sort((a, b) => b.price! - a.price!)
+    .slice(0, limit);
+  return {
+    day,
+    total: todays.length,
+    inStock: inStock.length,
+    withPrice: priced.length,
+    belowMarket: inStock.filter((car) => car.market?.label === "below").length,
+    medianPrice: prices.length ? prices[Math.floor(prices.length / 2)] : undefined,
+    topBrands: Object.entries(brands)
+      .map(([brand, count]) => ({ brand, count }))
+      .sort((a, b) => b.count - a.count || a.brand.localeCompare(b.brand))
+      .slice(0, 5),
+    deals,
+    best,
+  };
 }

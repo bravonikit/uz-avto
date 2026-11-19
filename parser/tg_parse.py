@@ -18,11 +18,14 @@ import json
 import re
 import sys
 from collections import Counter
+from datetime import datetime
 
 from enrich import extra_fields, find_price_type
 from export_to_site import MAX_MILEAGE_KM, find_year, merge_account_duplicates
 from extract_price import find_down_payment, find_prices, main_price
+from accounts import PARSER_DIR
 from tg_download import TG_DIR
+from tg_sold import link_sold
 
 LISTINGS_FILE = TG_DIR / "listings.json"
 # Разбор ЛЛМ для постов, с которыми правила не справились: {id: {is_listing, brand, model, year, mileage_km, price, is_sold}}.
@@ -244,7 +247,8 @@ def parse_post(post: dict) -> dict:
 
     if SERVICE.search(text):
         kind = "other"
-    elif is_sold and not brand and len(re.sub(r"\W", "", text)) < 60:
+    elif is_sold and price is None and len(re.sub(r"\W", "", text)) < 60:
+        # Короткое «продано» без цены, даже с моделью («W211 E240 Sotildi»): отметка о продаже, не объявление
         kind = "sold_notice"
     elif brand and (price is not None or year is not None or mileage is not None):
         on_order = price_type in ("cip", "order") and not mileage
@@ -268,7 +272,7 @@ def parse_post(post: dict) -> dict:
         **extra_fields(text),
         "description": text, "source": "telegram", "source_account": post["channel"], "source_url": post["url"],
         "date": post["date"], "views": post.get("views"), "edited": post.get("edited", False),
-        "first_seen": post.get("first_seen"), "removed_at": post.get("removed_at"),
+        "first_seen": post.get("first_seen"), "removed_at": post.get("removed_at"), "reply_to": post.get("reply_to"),
     }
 
 
@@ -304,23 +308,63 @@ def apply_llm(item: dict, parsed: dict | None) -> None:
         item["kind"] = "listing"
 
 
-def post_images(post: dict, posts: dict[str, dict]) -> tuple[list[str], bool]:
-    """(картинки поста, есть ли видео). У текста без картинок берём их из сообщения перед ним."""
+ALBUM_GLUE_SECONDS = 3600  # альбом фото без текста и видео с описанием той же машины: не дальше часа друг от друга
+
+
+def album_before(post: dict, ordered: list[dict], position: int) -> list[str]:
+    """Фото из альбомов без текста, которые стоят прямо перед видео с описанием.
+
+    Часть продавцов (a721_motors) выкладывает машину двумя постами: сначала альбом фото без подписи,
+    следом видео с текстом и ценой. Объявление это видео, а фото машины лежат в альбоме перед ним.
+    """
+    if post["type"] != "video":
+        return []
+    images: list[str] = []
+    for before in reversed(ordered[:position]):
+        if before.get("removed_at"):
+            continue
+        if before["text"] or before.get("text_in") or before["type"] not in ("album", "photo"):
+            break
+        if not 0 <= seconds_between(before["date"], post["date"]) <= ALBUM_GLUE_SECONDS:
+            break
+        images = list(before.get("images") or []) + images
+    return images
+
+
+def seconds_between(earlier: str, later: str) -> float:
+    return (datetime.fromisoformat(later.replace("Z", "+00:00"))
+            - datetime.fromisoformat(earlier.replace("Z", "+00:00"))).total_seconds()
+
+
+def post_images(post: dict, posts: dict[str, dict], ordered: list[dict] | None = None,
+                position: int | None = None) -> tuple[list[str], bool]:
+    """(картинки поста, есть ли видео). У текста без картинок берём их из сообщения перед ним.
+    У видео с текстом сначала идут фото из альбома перед ним, потом обложка самого видео."""
     owner = post if post.get("images") or not post.get("media_from") else posts.get(str(post["media_from"]), post)
-    return list(owner.get("images") or []), owner["type"] == "video" or bool(owner.get("video_durations"))
+    images = list(owner.get("images") or [])
+    if ordered is not None and position is not None and owner is post:
+        images = album_before(post, ordered, position) + images
+    return images, owner["type"] == "video" or bool(owner.get("video_durations"))
+
+
+SOLD_COUNTS: Counter = Counter()
 
 
 def parse_channel(channel: str, llm_parsed: dict) -> list[dict]:
     posts = json.loads((TG_DIR / channel / "posts.json").read_text(encoding="utf-8"))
     parsed = []
+    ordered = sorted(posts.values(), key=lambda post: post["id"])
+    positions = {post["id"]: position for position, post in enumerate(ordered)}
     for post in posts.values():
         if not post["text"]:
             continue
         item = parse_post(post)
         apply_llm(item, llm_parsed.get(item["id"]))
-        item["images"], item["has_video"] = post_images(post, posts)
+        item["images"], item["has_video"] = post_images(post, posts, ordered, positions[post["id"]])
         item["image"] = item["images"][0] if item["images"] else None
         parsed.append(item)
+    # Отдельные сообщения «продано» отмечают исходное объявление проданным
+    SOLD_COUNTS.update(link_sold(channel, parsed, TG_DIR / channel, PARSER_DIR))
     (TG_DIR / channel / "parsed.json").write_text(json.dumps(parsed, ensure_ascii=False, indent=1), encoding="utf-8")
     return parsed
 
@@ -359,6 +403,8 @@ def main() -> None:
           f"с пробегом {share('mileage_km')}, с фото {share('image')}")
     print(f"  проданы {sum(item['is_sold'] for item in cars)}, пост удалён {sum(1 for item in cars if item['removed_at'])}, "
           f"цена менялась {sum(1 for item in cars if item['price_history'])}, разобрано ЛЛМ {sum(1 for item in listings if item.get('llm'))}")
+    print(f"  «продано» отдельным постом связано с объявлением: ответом {SOLD_COUNTS['reply']}, по фото {SOLD_COUNTS['photo']}, "
+          f"по модели в тексте {SOLD_COUNTS['text']}, не нашлось {SOLD_COUNTS['none']} из {SOLD_COUNTS['notices']}")
 
 
 if __name__ == "__main__":

@@ -23,7 +23,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="ru" className={`${inter.variable} h-full antialiased`}>
-      <body className="flex min-h-full flex-col bg-slate-50 text-slate-900">
+      <body className="flex min-h-full flex-col bg-white text-slate-900">
         <Header />
         {/* Счётчик просмотров: ничего не рисует, только считает открытия страниц */}
         <Suspense fallback={null}>

@@ -7,6 +7,7 @@ import { ListingCard } from "@/components/ListingCard";
 import { SearchForm } from "@/components/SearchForm";
 import { filtersFromSearchParams, getBrandModels, PAGE_SIZE, searchListings } from "@/lib/listings";
 import { parseNumber } from "@/lib/format";
+import { getPublishedListings } from "@/lib/published";
 
 export const metadata: Metadata = { title: "Объявления о продаже авто" };
 
@@ -26,7 +27,8 @@ export default function CarsPage({ searchParams }: PageProps<"/cars">) {
 async function Results({ searchParams }: Pick<PageProps<"/cars">, "searchParams">) {
   const params = await searchParams;
   const filters = filtersFromSearchParams(params);
-  const listings = searchListings(filters);
+  // Вместе с собранными показываем объявления продавцов, одобренные в админке
+  const listings = searchListings(filters, await getPublishedListings());
 
   // Страницы: /cars?page=2. Показываем по PAGE_SIZE карточек, а не всё сразу
   const pageCount = Math.max(1, Math.ceil(listings.length / PAGE_SIZE));
@@ -50,12 +52,22 @@ async function Results({ searchParams }: Pick<PageProps<"/cars">, "searchParams"
         {/* key заставляет форму обновиться, если фильтры в адресе поменялись */}
         <SearchForm key={JSON.stringify(filters)} brands={getBrandModels()} initial={filters} />
       </div>
+      {filters.day && (
+        <p className="mb-3 text-sm">
+          <span className="rounded-full bg-slate-900 px-3 py-1 font-medium text-white">
+            Только за {filters.day}: {listings.length} объявлений
+          </span>
+          <Link href="/cars" className="ml-2 text-brand-700 hover:underline">
+            показать все
+          </Link>
+        </p>
+      )}
       {filters.seller && (
         <p className="mb-3 text-sm">
-          <span className="rounded-full bg-fuchsia-50 px-3 py-1 font-medium text-fuchsia-700 ring-1 ring-fuchsia-200">
+          <span className="rounded-full bg-slate-900 px-3 py-1 font-medium text-white">
             Продавец @{filters.seller}
           </span>
-          <Link href="/cars" className="ml-2 text-emerald-700 hover:underline">
+          <Link href="/cars" className="ml-2 text-brand-700 hover:underline">
             показать всех
           </Link>
         </p>
@@ -73,7 +85,7 @@ async function Results({ searchParams }: Pick<PageProps<"/cars">, "searchParams"
       ) : (
         <div className="rounded-2xl bg-white p-10 text-center ring-1 ring-slate-200">
           <p className="font-medium">По вашему запросу ничего не нашлось</p>
-          <Link href="/cars" className="mt-2 inline-block text-sm text-emerald-700 hover:underline">
+          <Link href="/cars" className="mt-2 inline-block text-sm text-brand-700 hover:underline">
             Сбросить фильтры
           </Link>
         </div>
@@ -109,7 +121,7 @@ function Pagination({
         <span key={n} className="flex items-center gap-2">
           {i > 0 && n - numbers[i - 1] > 1 && <span className="text-slate-400">…</span>}
           {n === page ? (
-            <span className={`${button} bg-emerald-600 text-white ring-emerald-600`} aria-current="page">
+            <span className={`${button} bg-brand-600 text-white ring-brand-600`} aria-current="page">
               {n}
             </span>
           ) : (

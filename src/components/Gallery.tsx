@@ -23,7 +23,7 @@ export function Gallery({ listing }: { listing: Listing }) {
             onClick={() => setActive(view)}
             aria-label={`Фото ${view + 1}`}
             className={`overflow-hidden rounded-xl ring-2 transition ${
-              active === view ? "ring-emerald-500" : "ring-transparent opacity-70 hover:opacity-100"
+              active === view ? "ring-brand-500" : "ring-transparent opacity-70 hover:opacity-100"
             }`}
           >
             <CarPhoto listing={listing} view={view} className="aspect-[16/10]" />

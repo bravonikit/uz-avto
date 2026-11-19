@@ -41,6 +41,9 @@ parser/.venv/
 parser/.env
 !parser/.env.example
 parser/data/
+# вход в Telegram (tg_login.py): это ключ от аккаунта
+parser/*.session
+parser/*.session-journal
 __pycache__/
 
 # typescript
@@ -57,3 +60,11 @@ next-env.d.ts
 
 # счётчик просмотров сайта (локальный файл)
 /.data/
+
+# сравнение «было и стало»: картинки пробы нового конвейера и сборка второго сайта
+/public/preview/
+# обработанные карточки (parser/cards_daily.py): картинки и то, что подставляется на сайт
+/public/cards/
+/src/data/cards-overlay.json
+/.next-preview/
+/.next-posts/

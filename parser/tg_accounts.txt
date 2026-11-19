@@ -45,9 +45,39 @@ rostanarzonnn   rostan.arzon
 komolon_avto    kamolon_avto
 avto_otash      avto_otash
 
-# Самый большой канал, около 48 постов в день: первый обход займёт пару часов и около 1 ГБ.
-# Уберите # перед строкой, когда будете готовы.
-# carsaleuzb  carsaleuz,evcarsaleuz
+# Самый большой канал, около 48 постов в день: первый обход займёт пару часов и около 1 ГБ. Включён 15.11.2026.
+carsaleuzb  carsaleuz,evcarsaleuz
 
-# Заброшен с октября 2023
-# Biloljon_MotorsUz  biloljon_motors
+# Добавлены 15.11.2026 из Notion «Telegram каналы»: остальные каналы наших продавцов.
+# Цена есть в тексте
+avtolux_uzb_original  autolux_uzb
+Fayz_Automotors       fayz_automotors
+eskishahar_avto       eskishahar_avto
+lux_autouz            lux_autouz
+brocarsuz             bro.cars.uz
+auto_tash             auto.tash
+avtosales_tashkentuz  avtosales_tashkent
+# Цены в тексте мало или нет (на фото или в личке), по сверке 11.11
+sotvolami             sotibolamiz.sotamiz
+moment_motors_uz      moment.motors_uz,timur_moment
+autosotamiz           autosotamiz
+fayz_avt0             fayz.avto
+Avto_Market7777       avto_market_sale
+avtosotvordiuz        avto_naht
+Mercedes_uzbek        sarvar_avto_
+kichkinainomarkachi   kichkina_inomarkachi
+auto_sale_umar777     auto_sale_umar
+naxti_asal            naxti_asal
+kingmotors_uz         kingmotors_uz
+avto_sroj             avto_sroj
+tashkent_auto_center  tashauto_center
+PremiumCarsale_uz     azdex.uz
+milliy_avto_savdo     milliy_avto_bozori
+avtojekk              avtojek.uz,avtojek
+isocars               allibekoff
+# Не постили больше месяца на 11.11
+aliauto_uz            aliauto.uz
+inomarka_ac           ac_inomarka
+evhub_motors1         evhub_motors
+faqat_nasiyaa         faqat_nasiya_
+Carsofsaleuzz         carsofsaleuz

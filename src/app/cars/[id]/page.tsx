@@ -7,22 +7,24 @@ import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { Freshness } from "@/components/Freshness";
 import { Gallery } from "@/components/Gallery";
+import { PhotoGallery } from "@/components/PhotoGallery";
 import { ListingCard } from "@/components/ListingCard";
-import { ListingPhoto } from "@/components/ListingPhoto";
 import { formatDate, formatMileage, formatPrice } from "@/lib/format";
 import {
   countSellerListings,
   getAllListingIds,
-  getListing,
   getSimilarListings,
   listingTitle,
   priceInSum,
   LIQUIDITY_LABELS,
   MARKET_COLORS,
   MARKET_LABELS,
+  PHOTO_QUALITY_NOTES,
   PRICE_TYPE_LABELS,
   SOURCE_LABELS,
+  type Listing,
 } from "@/lib/listings";
+import { findListing } from "@/lib/published";
 
 // Заранее (при сборке) создаём страницы для всех объявлений —
 // так они открываются мгновенно.
@@ -31,7 +33,7 @@ export function generateStaticParams() {
 }
 
 export async function generateMetadata({ params }: PageProps<"/cars/[id]">): Promise<Metadata> {
-  const listing = getListing((await params).id);
+  const listing = await findListing((await params).id);
   if (!listing) return { title: "Объявление не найдено" };
   return { title: `${listingTitle(listing)} — ${formatPrice(listing.price, listing.currency)}` };
 }
@@ -59,11 +61,14 @@ function ListingSkeleton() {
 }
 
 async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params">) {
-  const listing = getListing((await params).id);
+  // Объявление может быть собранным из Telegram или поданным продавцом через кабинет
+  const listing = await findListing((await params).id);
   if (!listing) notFound();
   const similar = getSimilarListings(listing);
 
   // Показываем только характеристики, которые известны
+  // Все фото карточки для галереи: обложка первой, без повторов
+  const photos = [...new Set([listing.image, ...(listing.photos ?? [])].filter((photo): photo is string => Boolean(photo)))];
   const specs = (
     [
       ["Год выпуска", listing.year],
@@ -75,6 +80,7 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
       ["Топливо", listing.fuel],
       ["Коробка", listing.transmission],
       ["Привод", listing.drive],
+      ...evSpecs(listing),
       ["Город", listing.city],
     ] as const
   ).filter(([, value]) => value !== undefined);
@@ -118,18 +124,25 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
             </p>
           )}
 
+          {listing.photoQuality !== "good" && (
+            <p className="mt-3 rounded-xl bg-amber-50 px-4 py-2 text-sm text-amber-800">
+              {PHOTO_QUALITY_NOTES[listing.photoQuality]}
+            </p>
+          )}
+
           <div className="mt-5">
-            {listing.image ? (
-              <ListingPhoto
-                listing={listing}
-                sizes="(min-width: 1024px) 760px, 100vw"
-                priority
-                className="overflow-hidden rounded-2xl ring-1 ring-slate-200"
-              />
-            ) : (
-              <Gallery listing={listing} />
-            )}
+            {photos.length > 0 ? <PhotoGallery photos={photos} alt={listingTitle(listing)} /> : <Gallery listing={listing} />}
           </div>
+
+          {listing.preview && (
+            <p className="mt-3 text-sm text-slate-500">
+              {listing.preview.kind === "generated" && "Фото сделаны ИИ по видео продавца, настоящие кадры смотрите в его посте. "}
+              {listing.preview.kind === "outpaint" && "Края обложки дорисованы ИИ, сама машина с фото продавца. "}
+              {listing.preview.priceSource === "voice" &&
+                `Цена взята из видео со слов продавца${listing.preview.priceApprox ? ", приблизительно" : ""}. `}
+              {listing.preview.priceSource === "overlay" && "Цена взята из надписи на видео. "}
+            </p>
+          )}
 
           <h2 className="mt-8 mb-3 text-xl font-bold">Характеристики</h2>
           {specs.length > 0 ? (
@@ -143,6 +156,46 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
             </dl>
           ) : (
             <p className="text-slate-500">Не указаны — смотрите описание.</p>
+          )}
+
+          {(listing.summary || listing.speech) && (
+            <>
+              <h2 className="mt-8 mb-3 text-xl font-bold">Коротко о машине</h2>
+              {listing.summary && <p className="leading-relaxed text-slate-700">{listing.summary}</p>}
+              {listing.speech && (
+                <p className="mt-2 leading-relaxed text-slate-700">
+                  <span className="font-medium">Из видео продавца:</span> {listing.speech}
+                </p>
+              )}
+              {listing.transcriptRu && listing.transcriptLang !== "ru" && (
+                <details open className="mt-3 text-slate-700">
+                  <summary className="cursor-pointer text-sm font-medium text-slate-500 hover:text-slate-700">
+                    Что говорит продавец в видео (перевод на русский)
+                  </summary>
+                  <p className="mt-2 whitespace-pre-line text-sm leading-relaxed">{listing.transcriptRu}</p>
+                </details>
+              )}
+              {listing.transcriptUz && listing.transcriptLang !== "uz" && (
+                <details className="mt-2 text-slate-700" lang="uz">
+                  <summary className="cursor-pointer text-sm font-medium text-slate-500 hover:text-slate-700">
+                    Sotuvchi videoda nima deydi (oʻzbekcha)
+                  </summary>
+                  <p className="mt-2 whitespace-pre-line text-sm leading-relaxed">{listing.transcriptUz}</p>
+                </details>
+              )}
+              {listing.transcript && (
+                <details className="mt-2 text-slate-700">
+                  <summary className="cursor-pointer text-sm font-medium text-slate-500 hover:text-slate-700">
+                    Что говорит продавец в видео, дословно{listing.transcriptLang === "uz" ? " (на узбекском)" : listing.transcriptLang === "mixed" ? " (узбекский и русский)" : ""}
+                  </summary>
+                  <p className="mt-2 whitespace-pre-line text-sm leading-relaxed">{listing.transcript}</p>
+                  <p className="mt-1 text-xs text-slate-400">Расшифровка сделана автоматически, возможны ошибки в словах.</p>
+                </details>
+              )}
+              <p className="mt-2 text-xs text-slate-400">
+                Пересказ составлен автоматически по тексту{listing.speech ? " и ролику" : ""} продавца. Точные слова продавца ниже.
+              </p>
+            </>
           )}
 
           <h2 className="mt-8 mb-3 text-xl font-bold">
@@ -162,6 +215,20 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
                 ≈ {formatPrice(priceInSum(listing))} по тестовому курсу
               </p>
             )}
+            {listing.priceFrom && !listing.isSold && (
+              <p className="mt-1 text-xs text-slate-500">
+                {listing.priceFrom.source === "voice"
+                  ? `В тексте цены нет, продавец назвал её в ролике${listing.priceFrom.approx ? " приблизительно" : ""}.`
+                  : "В тексте цены нет, она написана на фото объявления."}{" "}
+                Уточняйте у продавца.
+              </p>
+            )}
+            {listing.priceOriginal && (
+              <p className="mt-1 text-xs text-slate-500">
+                У продавца цена в евро: {listing.priceOriginal.value.toLocaleString("ru-RU")} €, пересчитали в доллары
+                примерно.
+              </p>
+            )}
             {listing.priceType && (
               <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
                 {PRICE_TYPE_LABELS[listing.priceType]}: это цена не за машину в наличии, уточняйте у продавца
@@ -176,7 +243,7 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
                 <p className="text-slate-600">
                   Похожие машины: около {formatPrice(listing.market.price, "USD")}, обычно от{" "}
                   {formatPrice(listing.market.low, "USD")} до {formatPrice(listing.market.high, "USD")}. Сравнили с{" "}
-                  {listing.market.count} объявлениями той же модели и близкого года.
+                  {listing.market.count} объявлениями той же модели и близкого года, с поправкой на пробег и год.
                 </p>
               </div>
             )}
@@ -189,7 +256,7 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
                 <ul className="mt-1 space-y-0.5">
                   {listing.alsoAt.map((place) => (
                     <li key={place.url}>
-                      <a href={place.url} target="_blank" rel="noopener noreferrer" className="text-sky-600 hover:underline">
+                      <a href={place.url} target="_blank" rel="noopener noreferrer" className="text-brand-700 hover:underline">
                         {place.account}
                       </a>
                       {place.price !== undefined && `: ${formatPrice(place.price, "USD")}`}
@@ -202,7 +269,7 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
               <p className="mt-1 text-sm text-slate-500">Продавец не указал цену в посте, уточняйте у него.</p>
             )}
             {listing.downPayment !== undefined && (
-              <p className="mt-2 text-sm font-medium text-emerald-700">
+              <p className="mt-2 text-sm font-medium text-slate-800">
                 В рассрочку, первый взнос от {formatPrice(listing.downPayment, "USD")}
               </p>
             )}
@@ -210,7 +277,7 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
             {listing.seller && (
               <>
                 <div className="mt-5 flex items-center gap-3">
-                  <div className="flex size-11 items-center justify-center rounded-full bg-emerald-100 text-lg font-bold text-emerald-700">
+                  <div className="flex size-11 items-center justify-center rounded-full bg-slate-100 text-lg font-bold text-slate-800">
                     {listing.seller.name[0]}
                   </div>
                   <div>
@@ -220,7 +287,7 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
                 </div>
                 <a
                   href={`tel:${listing.seller.phone.replace(/[^\d+]/g, "")}`}
-                  className="mt-5 block rounded-xl bg-emerald-600 px-4 py-3 text-center font-semibold text-white hover:bg-emerald-700"
+                  className="mt-5 block rounded-xl bg-brand-600 px-4 py-3 text-center font-semibold text-white hover:bg-brand-700"
                 >
                   {listing.seller.phone}
                 </a>
@@ -238,15 +305,13 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
                   href={listing.source.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className={`mt-4 block rounded-xl px-4 py-3 text-center font-semibold text-white hover:opacity-90 ${
-                    listing.source.platform === "telegram" ? "bg-sky-500" : "bg-gradient-to-r from-fuchsia-600 to-orange-500"
-                  }`}
+                  className="mt-4 block rounded-xl bg-brand-600 px-4 py-3 text-center font-semibold text-white hover:bg-brand-700"
                 >
                   Открыть в {SOURCE_LABELS[listing.source.platform]} ↗
                 </a>
                 <Link
                   href={`/cars?seller=${encodeURIComponent(listing.source.account)}`}
-                  className="mt-2 block rounded-xl px-4 py-3 text-center text-sm font-semibold text-emerald-700 ring-1 ring-emerald-200 hover:bg-emerald-50"
+                  className="mt-2 block rounded-xl px-4 py-3 text-center text-sm font-semibold text-slate-900 ring-1 ring-slate-300 hover:bg-slate-50"
                 >
                   Все объявления продавца ({countSellerListings(listing.source.account)})
                 </Link>
@@ -266,7 +331,7 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
             <h2 className="text-xl font-bold">Похожие объявления</h2>
             <Link
               href={`/cars?brand=${encodeURIComponent(listing.brand)}&model=${encodeURIComponent(listing.model)}`}
-              className="text-sm font-medium text-emerald-700 hover:underline"
+              className="text-sm font-medium text-brand-700 hover:underline"
             >
               Все {listing.brand} {listing.model}
             </Link>
@@ -280,4 +345,18 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
       )}
     </div>
   );
+}
+
+// Электромобили и гибриды: запас хода и батарея, если продавец их назвал (parser/ev_specs.py)
+function evSpecs(listing: Listing): [string, string | undefined][] {
+  const ev = listing.ev;
+  if (!ev) return [];
+  const km = (value?: number) => (value ? `${value.toLocaleString("ru-RU")} км` : undefined);
+  return [
+    ["Тип", listing.fuel ? undefined : ev.powertrain === "hybrid" ? "Гибрид" : ev.powertrain === "ev" ? "Электромобиль" : undefined],
+    [ev.powertrain === "hybrid" ? "Запас хода на электричестве" : "Запас хода", km(ev.rangeKm)],
+    ["Общий запас хода", km(ev.rangeTotalKm)],
+    ["Проходит сейчас", km(ev.rangeNowKm)],
+    ["Батарея", ev.batteryPct ? `${ev.batteryPct}%` : undefined],
+  ];
 }

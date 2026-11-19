@@ -1,0 +1,44 @@
+#!/bin/bash
+# Часовой прогон: только свежие посты Telegram за сутки → разбор → сайт. Занимает несколько минут.
+# Нужен, чтобы новая машина появлялась на сайте в течение часа (пик выкладки с 14 до 23).
+# Правки, «продано» и удаления за 14 и 90 дней, Instagram, архив делает ежедневный run_daily.sh.
+# Замок общий с run_daily.sh: пока идёт ежедневный, часовой пропускается.
+# macOS запускает каждый час в :07 (install_schedule.sh). Лог: data/logs/hourly-ГГГГ-ММ-ДД.log
+
+PARSER_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$PARSER_DIR" || exit 1
+source ./lock.sh
+
+mkdir -p data/logs
+LOG="data/logs/hourly-$(date +%Y-%m-%d).log"
+
+if ! take_lock daily; then
+    echo "$(date '+%H:%M') идёт ежедневный прогон, пропускаю" >> "$LOG"
+    exit 0
+fi
+
+need_space 3 || exit 0  # мало места: часовой прогон пропускаем
+
+PYTHON="$PARSER_DIR/.venv/bin/python"
+export PYTHONUNBUFFERED=1
+{
+    echo "===== $(date '+%d.%m.%Y %H:%M') часовой ====="
+    caffeinate -i "$PYTHON" tg_download.py --quick | grep --line-buffered -E "готово|ошибка|нет каналов|остановлен"
+    "$PYTHON" tg_parse.py | tail -4
+    if ! pgrep -f "tg_video.py" >/dev/null; then
+        caffeinate -i "$PYTHON" tg_video.py --only download --light-only --days 2 | grep "^Видео"
+    fi
+    "$PYTHON" export_to_site.py | grep -E "^Выгружено"
+    # Свежие фото сразу уезжают на Google Диск, на Маке остаются ссылки
+    "$PYTHON" archive.py | grep -E "перенесено|не принимает|пропущен|не настроен"
+    # Карточки сразу (решение Ника 19.11.2026): новые посты в обработку, видео и описания обычными
+    # запросами (ответ за минуты), обложки и сетки очередью Google. Ответы очереди забирает run_collect.sh
+    if [ -f data/cards.on ]; then
+        caffeinate -i "$PYTHON" cards_daily.py fresh | grep --line-buffered -E "^Карточки|^Шаг|^Сайт|Пакет|Диск не принял|ошибка"
+        # Цена из голоса и фото для объявлений без цены: забрать готовое и отправить новые
+        "$PYTHON" price_fill.py run --limit 100 | grep -E "^Цена"
+    fi
+    echo "===== $(date '+%H:%M') конец"
+} 2>&1 | tee -a "$LOG"
+# Воронка «сегодня пока» в Telegram бот без звука, только если за час были новые посты (выключить: TG_HOURLY=0)
+"$PYTHON" tg_bot.py hourly "$LOG" >/dev/null 2>&1 || true

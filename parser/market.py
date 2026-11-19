@@ -1,8 +1,9 @@
 """Оценка цены и ликвидности объявления по похожим машинам. Первая версия, без обучения модели.
 
 Цена. Для машины берём аналоги: та же марка и модель, год отличается не больше чем на 1 (если аналогов
-мало, на 2), тот же класс (новая или с пробегом), машина в наличии, другой продавец. По ценам аналогов
-считаем медиану и границы средней половины (25% и 75%). Поля объявления:
+мало, на 2), тот же класс (новая или с пробегом), машина в наличии, другой продавец. Цену каждого аналога
+пересчитываем на год и пробег нашей машины (market_adjust.py): за пробег и возраст по коэффициентам модели.
+По пересчитанным ценам считаем медиану и границы средней половины (25% и 75%). Поля объявления:
   market_price, market_low, market_high   медиана и границы по аналогам, USD
   market_n                                сколько аналогов
   price_delta                             насколько цена отличается от медианы: -0.08 это на 8% ниже
@@ -18,6 +19,8 @@ liquidity_level (model: посчитано по модели, brand: по мар
 
 from datetime import datetime, timezone
 from statistics import median, quantiles
+
+from market_adjust import adjusted, fit_slopes
 
 MIN_ANALOGS = 5
 NEW_CAR_KM = 1_000  # пробег меньше этого: машина новая
@@ -43,21 +46,31 @@ def car_key(item: dict) -> tuple[str, str] | None:
     return item["brand"].lower(), item["model"].lower()
 
 
-def add_prices(listings: list[dict], this_year: int) -> None:
+def add_prices(listings: list[dict], this_year: int, adjust: bool = True) -> None:
     pool: dict[tuple, list[dict]] = {}
     for item in listings:
         key = car_key(item)
         if key and item["price"] is not None and item["year"] is not None and not item["price_type"]:
             pool.setdefault((key, is_new(item, this_year)), []).append(item)
+    # Поправка на пробег и год (market_adjust.py): коэффициенты по машинам с пробегом
+    slopes, general = fit_slopes({key: items for (key, new), items in pool.items() if not new})
     for item in listings:
         key = car_key(item)
         if not key or item["price"] is None or item["year"] is None or item["price_type"]:
             continue
         others = [o for o in pool.get((key, is_new(item, this_year)), [])
                   if o is not item and o["seller_id"] != item["seller_id"]]
-        analogs: list[int] = []
+        new = is_new(item, this_year)
+        slope = slopes.get(key, general)
+        if new:
+            slope = (slope[0], 0.0)  # у новых пробег почти нулевой, поправка только на год
+
+        def price_of(other: dict) -> float:
+            return adjusted(other["price"], other, item, slope) if adjust else other["price"]
+
+        analogs: list[float] = []
         for window in (1, 2):
-            analogs = [o["price"] for o in others if abs(o["year"] - item["year"]) <= window]
+            analogs = [price_of(o) for o in others if abs(o["year"] - item["year"]) <= window]
             if len(analogs) >= MIN_ANALOGS:
                 break
         if len(analogs) < MIN_ANALOGS:
