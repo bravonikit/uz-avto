@@ -32,6 +32,11 @@ export default function DailyPage({ searchParams }: Props) {
   );
 }
 
+// Сегодняшняя дата по Ташкенту, "2026-11-19"
+function tashkentToday() {
+  return new Date(Date.now() + 5 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
 function percent(share: number) {
   return `${Math.round(share * 100)}%`;
 }
@@ -127,7 +132,10 @@ async function Daily({ searchParams }: Props) {
 
   const days = getListingDays();
   if (days.length === 0) return <p className="text-slate-500">Объявлений пока нет.</p>;
-  const day = typeof params.day === "string" && days.includes(params.day) ? params.day : days[0];
+  // По умолчанию последний полный день: сегодняшний ещё набирается (утром в нём единицы машин)
+  const today = tashkentToday();
+  const lastFull = days.find((item) => item < today) ?? days[0];
+  const day = typeof params.day === "string" && days.includes(params.day) ? params.day : lastFull;
   const digest = getDailyDigest(day);
   const todaysTheme = themeIndexForDay(day);
   const asked = typeof params.theme === "string" ? Number(params.theme) : NaN;
@@ -149,7 +157,7 @@ async function Daily({ searchParams }: Props) {
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <h2 className="text-xl font-bold">Аналитика за {formatDate(day)}</h2>
           <span className="text-sm text-slate-500">
-            {day === days[0] ? "последний полный день в данных" : "архивный день"}
+            {day === lastFull ? "последний полный день в данных" : day === today ? "сегодня, день ещё не закончился" : "архивный день"}
           </span>
         </div>
         <div className="mt-3 flex flex-wrap gap-2 text-sm">

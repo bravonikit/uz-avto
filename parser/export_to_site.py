@@ -19,6 +19,7 @@ from datetime import datetime
 from statistics import median
 
 from accounts import PARSER_DIR, account_dir, load_accounts
+from apply_models import apply_models
 from market import add_market
 from sellers import SellerIndex
 
@@ -280,6 +281,9 @@ def link_image(source, target) -> None:
         shutil.copyfile(source, target)
 
 
+IMAGE_MISSES: list[str] = []  # объявления, у которых фото есть, но до файла не достать (Диск не виден)
+
+
 def telegram_listings() -> list[dict]:
     """Объявления Telegram в том же виде, что и объявления Instagram. Без марки и удалённые не берём."""
     if not TG_LISTINGS_FILE.exists():
@@ -290,9 +294,20 @@ def telegram_listings() -> list[dict]:
         if not item["brand"] or item.get("removed_at"):
             continue
         image = None
-        if item["image"] and (PARSER_DIR / item["image"]).exists():
-            link_image(PARSER_DIR / item["image"], SITE_TG_IMAGES_DIR / f"{item['id']}.jpg")
+        site_copy = SITE_TG_IMAGES_DIR / f"{item['id']}.jpg"
+        if site_copy.exists():
+            # Копия для сайта уже есть: исходник мог уехать на Google Диск (на Маке осталась ссылка),
+            # а автозапуск macOS не всегда видит Диск. Из за этого 19.11.2026 у сайта пропали почти все фото
             image = f"/tg/{item['id']}.jpg"
+        elif item["image"]:
+            try:
+                if (PARSER_DIR / item["image"]).exists():
+                    link_image(PARSER_DIR / item["image"], site_copy)
+                    image = f"/tg/{item['id']}.jpg"
+                else:
+                    IMAGE_MISSES.append(item["id"])
+            except OSError:
+                IMAGE_MISSES.append(item["id"])
         listing = {key: item[key] for key in (
             "id", "title", "brand", "model", "year", "mileage_km", "price", "currency", "down_payment",
             "description", "is_sold", "source_url", "source_account", "date", *EXTRA_FIELDS, "duplicate_ids", "price_history",
@@ -615,6 +630,8 @@ def main() -> None:
     instagram_count = len(listings)
     telegram = telegram_listings()
     listings, cross_duplicates = merge_across_sources(listings, telegram)
+    # Справочник моделей: каноничные марка, модель и поколение (до склейки продавцов и оценки рынка)
+    listings, models_stats = apply_models(listings)
     listings, opted_out, other_city = add_sellers(listings)
     listings, seller_duplicates, candidates = merge_across_sellers(listings)
     suspects = hide_suspect_prices(listings)
@@ -634,7 +651,13 @@ def main() -> None:
           f"выше {market['labels']['above']}, слишком далеко от рынка {market['labels']['check']}), "
           f"типичное отклонение от медианы {market['median_error']:.0%}; "
           f"с ликвидностью: {market['with_liquidity']} (по модели {market['liquidity_by_model']}, остальные по марке)")
+    print(f"  справочник моделей: уверенно {models_stats['ok']}, угадано {models_stats['guess']}, "
+          f"вручную {models_stats['manual']}, спорных {models_stats['disputed']} (админка /admin/models), "
+          f"исправлено названий {models_stats['renamed']}, скрыто решением {models_stats['hidden']}, "
+          f"грузовых и мото {models_stats['trucks']}")
     print(f"  с годом: {count('year')}, с пробегом: {count('mileage_km')}, с фото: {count('image')}")
+    if IMAGE_MISSES:
+        print(f"  фото не достать (нет доступа к Google Диску?): {len(IMAGE_MISSES)}, например {IMAGE_MISSES[0]}")
     print(f"  с ценой: {count('price')}, цена по запросу: {len(listings) - count('price')}")
     print(f"  не в наличии (под заказ, CIP, без растаможки): {count('price_type')}, с топливом: {count('fuel')}, "
           f"с цветом: {count('body_color')}, с городом: {count('city')}")
