@@ -20,6 +20,7 @@ from statistics import median
 
 from accounts import PARSER_DIR, account_dir, load_accounts
 from apply_models import apply_models
+from card_fields import apply_ev_specs, apply_price_fill, fix_euro
 from market import add_market
 from sellers import SellerIndex
 
@@ -423,6 +424,22 @@ def pair_decision(decisions: dict, first: dict, second: dict) -> str | None:
     return None
 
 
+# Каналы агрегаторы, которые перепечатывают чужие машины. Если их объявление похоже на объявление другого
+# канала (та же марка, модель, год и пробег, без подтверждения телефоном или текстом), оно не выгружается.
+# Список убранных: data/suspect_drops.json. Убрать канал отсюда: его объявления снова уйдут в ручную проверку.
+DROP_ON_SUSPECT = {"carsaleuzb"}
+SUSPECT_DROPS_FILE = PARSER_DIR / "data" / "suspect_drops.json"
+SUSPECT_DROPS: list[dict] = []
+
+
+def drop_suspect(first: dict, second: dict) -> dict | None:
+    """Какое из двух объявлений убрать: то, что из канала DROP_ON_SUSPECT. Оба или ни одного: None."""
+    first_drop, second_drop = first["source_account"] in DROP_ON_SUSPECT, second["source_account"] in DROP_ON_SUSPECT
+    if first_drop == second_drop:
+        return None
+    return first if first_drop else second
+
+
 def merge_across_sellers(listings: list[dict]) -> tuple[list[dict], int, list[dict]]:
     """Одна машина у разных продавцов (чаще всего агрегатор перепечатал чужое объявление).
 
@@ -461,6 +478,20 @@ def merge_across_sellers(listings: list[dict]) -> tuple[list[dict], int, list[di
                 if decision == "different":
                     continue
                 if not (same_phone or same_text or same_seller or decision == "same"):
+                    # Агрегатор с перепечатками (DROP_ON_SUSPECT): при любом подозрении на дубль
+                    # его объявление убираем, остаётся объявление другого канала (решение Ника 19.11.2026)
+                    dropped = drop_suspect(main, other)
+                    if dropped is not None:
+                        removed_ids.add(dropped["id"])
+                        kept = other if dropped is main else main
+                        for key in ("price", "currency", "image"):
+                            if kept[key] is None:
+                                kept[key] = dropped[key]
+                        SUSPECT_DROPS.append({"dropped": dropped["id"], "kept": kept["id"], "url": dropped["source_url"],
+                                              "kept_url": kept["source_url"], "car": f"{main['brand']} {main['model']} {main['year']}"})
+                        if dropped is main:
+                            break
+                        continue
                     candidates.append({
                         "car": f"{main['brand']} {main['model']} {main['year']}, {main['mileage_km']} км",
                         "first": {"id": main["id"], "account": main["source_account"], "price": main["price"], "url": main["source_url"]},
@@ -481,7 +512,8 @@ def merge_across_sellers(listings: list[dict]) -> tuple[list[dict], int, list[di
                     if main[key] is None:
                         main[key] = other[key]
     CROSS_SELLER_CANDIDATES_FILE.write_text(json.dumps(candidates, ensure_ascii=False, indent=1), encoding="utf-8")
-    return [item for item in listings if item["id"] not in removed_ids], len(removed_ids), candidates
+    SUSPECT_DROPS_FILE.write_text(json.dumps(SUSPECT_DROPS, ensure_ascii=False, indent=1), encoding="utf-8")
+    return [item for item in listings if item["id"] not in removed_ids], len(removed_ids) - len(SUSPECT_DROPS), candidates
 
 
 def load_price_overrides() -> dict:
@@ -632,6 +664,10 @@ def main() -> None:
     listings, cross_duplicates = merge_across_sources(listings, telegram)
     # Справочник моделей: каноничные марка, модель и поколение (до склейки продавцов и оценки рынка)
     listings, models_stats = apply_models(listings)
+    # Цены в евро в доллары, запас хода из текста, цена и запас хода из голоса и фото (card_fields.py)
+    euro_fixed = fix_euro(listings)
+    with_range = apply_ev_specs(listings)
+    filled = apply_price_fill(listings)
     listings, opted_out, other_city = add_sellers(listings)
     listings, seller_duplicates, candidates = merge_across_sellers(listings)
     suspects = hide_suspect_prices(listings)
@@ -645,6 +681,8 @@ def main() -> None:
     print(f"\nВыгружено объявлений: {len(listings)} → {OUTPUT_FILE.relative_to(SITE_DIR)}")
     print(f"  Instagram: {instagram_count}, Telegram: {len(telegram)}, одна машина на обеих площадках: {cross_duplicates}")
     print(f"  убрано дублей внутри аккаунтов Instagram: {duplicates}")
+    print(f"  убрано перепечаток агрегаторов ({', '.join(sorted(DROP_ON_SUSPECT))}) при подозрении на дубль: "
+          f"{len(SUSPECT_DROPS)} (data/{SUSPECT_DROPS_FILE.name})")
     print(f"  одна машина у разных продавцов: склеено {seller_duplicates}, на ручную проверку {len(candidates)} пар "
           f"(data/{CROSS_SELLER_CANDIDATES_FILE.name}); убрано по отказу продавца: {opted_out}, из-за другого города: {other_city}")
     print(f"  оценка цены: {market['priced']} машин (ниже рынка {market['labels']['below']}, в рынке {market['labels']['fair']}, "
@@ -655,6 +693,8 @@ def main() -> None:
           f"вручную {models_stats['manual']}, спорных {models_stats['disputed']} (админка /admin/models), "
           f"исправлено названий {models_stats['renamed']}, скрыто решением {models_stats['hidden']}, "
           f"грузовых и мото {models_stats['trucks']}")
+    print(f"  запас хода: у {with_range + filled['range']} (из текста {with_range}, из голоса и фото {filled['range']}); "
+          f"цена из голоса {filled['voice']}, с фото {filled['image']}; цен в евро переведено в доллары {euro_fixed}")
     print(f"  с годом: {count('year')}, с пробегом: {count('mileage_km')}, с фото: {count('image')}")
     if IMAGE_MISSES:
         print(f"  фото не достать (нет доступа к Google Диску?): {len(IMAGE_MISSES)}, например {IMAGE_MISSES[0]}")
