@@ -9,9 +9,9 @@
   1. поднимает свой экземпляр сайта (npm run dev на порту POSTS_PORT, папка сборки .next-posts),
      чтобы не мешать сайту, который открыт руками;
   2. открывает /admin/daily в невидимом Chrome через Playwright, ждёт, пока картинка дорисуется;
-  3. нажимает «Опубликовать в канал» и «Да»: дальше всё как при ручной публикации
+  3. нажимает «Опубликовать в канал»: дальше всё как при ручной публикации
      (подпись без заглушек, учёт в .data/tg-posts.json, повторно один и тот же пост не уйдёт);
-  4. сообщает Нику в бот, что ушло, со ссылкой. Не вышло: тоже сообщает.
+  4. сайт сообщает Нику в бот, что ушло, со ссылкой. Не вышло: скрипт присылает ошибку.
 
 Не публикует, если данные старые (последний полный день раньше позавчера): значит, прогон не работал.
 Выключить автопостинг: touch data/posts.off. Включить обратно: rm data/posts.off
@@ -121,20 +121,16 @@ def publish(take_all: bool, dry: bool) -> list[str]:
         for section in pending if take_all else pending[:1]:
             key = section.get_attribute("data-post")
             section.locator("canvas[data-ready]").wait_for(timeout=120_000)
-            button = section.get_by_role("button", name="Опубликовать в канал")
+            button = section.locator("button[data-state]")
             if button.count() == 0:
                 raise RuntimeError("нет кнопки «Опубликовать в канал»: канал не настроен (TG_CHANNEL в parser/.env)")
-            button.click()
             if dry:
-                report.append(f"Проверка: {title_of(key)} за {day} готов к публикации")
-                section.get_by_role("button", name="Нет").click()
+                report.append(f"Проверка: «{title_of(key)}» за {day} готов к публикации, кнопка на месте")
                 continue
-            section.get_by_role("button", name="Да", exact=True).click()
-            result = section.locator("text=/^(Опубликовано|Не опубликовано)/").first
-            result.wait_for(timeout=120_000)
-            text = result.inner_text()
-            if text.startswith("Не опубликовано"):
-                raise RuntimeError(f"{title_of(key)}: {text}")
+            button.click()
+            section.locator("button[data-state=sent], button[data-state=error]").wait_for(timeout=120_000)
+            if button.get_attribute("data-state") == "error":
+                raise RuntimeError(f"{title_of(key)}: {section.locator('text=/^Не опубликовано/').first.inner_text()}")
             link = section.locator("a", has_text="открыть пост")
             url = link.get_attribute("href") if link.count() else ""
             report.append(f"📣 В канал ушёл пост «{title_of(key)}» за {day}" + (f"\n{url}" if url else ""))
@@ -159,10 +155,7 @@ def main() -> None:
     try:
         process = start_site()
         lines = publish(args.all, args.dry)
-        print("\n".join(lines))
-        for line in lines:
-            if line.startswith("📣"):
-                tg_bot.send(line, silent=True)
+        print("\n".join(lines))  # отчёт в бот о вышедшем посте шлёт сам сайт (src/lib/telegram.ts)
     except Exception as error:
         message = f"Автопостинг: пост не вышел ({error})"
         print(message)

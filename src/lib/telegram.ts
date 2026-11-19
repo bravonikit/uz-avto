@@ -28,13 +28,20 @@ function parserEnv(): Record<string, string> {
   }
 }
 
-export function telegramConfig(): { token?: string; channel?: string } {
+export function telegramConfig(): { token?: string; channel?: string; alertChat?: string } {
   const env = parserEnv();
   return {
     token: process.env.TG_BOT_TOKEN || env.TG_BOT_TOKEN || undefined,
     channel: process.env.TG_CHANNEL || env.TG_CHANNEL || undefined,
+    alertChat: process.env.TG_ALERT_CHAT_ID || env.TG_ALERT_CHAT_ID || undefined,
   };
 }
+
+const POST_NAMES: [string, string][] = [
+  ["nizhe-rynka", "Ниже рынка"],
+  ["samye-krasivye", "Самые красивые"],
+  ["podborka", "Подборка дня"],
+];
 
 // Канал для показа в админке: "@uzavto_daily" или undefined, если бот не настроен
 export function telegramChannel(): string | undefined {
@@ -70,7 +77,7 @@ function postUrl(channel: string, messageId: number) {
 // Картинка с подписью. Подпись длиннее 1024 знаков: у картинки только первая строка,
 // весь текст ответом на неё вторым сообщением (ссылки на машины не теряются).
 export async function publishToChannel(key: string, photo: Blob, caption: string): Promise<PublishedPost> {
-  const { token, channel } = telegramConfig();
+  const { token, channel, alertChat } = telegramConfig();
   if (!token || !channel) throw new Error("Бот не настроен: нет TG_BOT_TOKEN или TG_CHANNEL (python parser/tg_bot.py setup)");
 
   const short = caption.length <= CAPTION_LIMIT;
@@ -95,5 +102,16 @@ export async function publishToChannel(key: string, photo: Blob, caption: string
   log[key] = post;
   await mkdir(path.dirname(LOG_FILE), { recursive: true });
   await writeFile(LOG_FILE, JSON.stringify(log, null, 2));
+
+  // Отчёт Нику в бот: что ушло и ссылка. Не дошёл отчёт: пост всё равно опубликован, ошибку не поднимаем
+  if (alertChat) {
+    const name = POST_NAMES.find(([prefix]) => key.startsWith(prefix))?.[1] ?? key;
+    await call(token, "sendMessage", {
+      chat_id: alertChat,
+      text: `📣 В канал ушёл пост «${name}»${post.url ? `\n${post.url}` : ""}`,
+      disable_notification: true,
+      link_preview_options: { is_disabled: true },
+    }).catch(() => undefined);
+  }
   return post;
 }

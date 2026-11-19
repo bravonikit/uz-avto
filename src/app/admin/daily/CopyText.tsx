@@ -5,9 +5,18 @@ import { useState } from "react";
 
 export function CopyText({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
+  // Буфер обмена браузер даёт только на localhost и https. По адресу 10.x.x.x копируем старым способом
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(text);
+      if (navigator.clipboard) await navigator.clipboard.writeText(text);
+      else {
+        const area = document.createElement("textarea");
+        area.value = text;
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand("copy");
+        area.remove();
+      }
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -26,9 +35,9 @@ export function CopyText({ text }: { text: string }) {
       <button
         type="button"
         onClick={copy}
-        className="mt-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700"
+        className={`mt-2 rounded-xl px-4 py-2 text-sm font-semibold text-white transition active:scale-95 ${copied ? "bg-emerald-600" : "bg-slate-900 hover:bg-slate-700"}`}
       >
-        {copied ? "Скопировано" : "Скопировать текст"}
+        {copied ? "Скопировано ✓" : "Скопировать текст"}
       </button>
     </div>
   );

@@ -226,13 +226,16 @@ async function draw(canvas: HTMLCanvasElement, { layout, kicker, title, footer, 
   }
 }
 
+type PublishState = "idle" | "confirm" | "sending" | "sent" | "error";
+
 export function PostImage(props: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [message, setMessage] = useState("");
   const { layout, kicker, title, footer, date, items, fileName, caption, channel, published } = props;
-  const [confirming, setConfirming] = useState(false);
-  const [sending, setSending] = useState(false);
+  const [copyLabel, setCopyLabel] = useState("Скопировать");
+  const [state, setState] = useState<PublishState>("idle");
+  const [error, setError] = useState("");
   const [sentUrl, setSentUrl] = useState<string | undefined>(published?.url);
+  const wasSent = Boolean(published) || state === "sent";
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -244,8 +247,10 @@ export function PostImage(props: Props) {
     });
   }, [layout, kicker, title, footer, date, items, fileName]);
 
-  const toBlob = () =>
-    new Promise<Blob | null>((resolve) => (canvasRef.current ? canvasRef.current.toBlob(resolve, "image/png") : resolve(null)));
+  const toBlob = (type = "image/png", quality?: number) =>
+    new Promise<Blob | null>((resolve) =>
+      canvasRef.current ? canvasRef.current.toBlob(resolve, type, quality) : resolve(null),
+    );
 
   const download = async () => {
     const blob = await toBlob();
@@ -257,84 +262,94 @@ export function PostImage(props: Props) {
     URL.revokeObjectURL(link.href);
   };
 
+  // Копирование картинки работает только на localhost или https: по адресу 10.x.x.x браузер не даёт буфер
   const copy = async () => {
     try {
       const blob = await toBlob();
-      if (!blob) return;
+      if (!blob || !navigator.clipboard) throw new Error("нет буфера");
       await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-      setMessage("Картинка скопирована");
+      setCopyLabel("Скопировано ✓");
     } catch {
-      setMessage("Браузер не дал скопировать, скачайте файл");
+      setCopyLabel("Не дал браузер, скачайте");
     }
-    setTimeout(() => setMessage(""), 2500);
+    setTimeout(() => setCopyLabel("Скопировать"), 2500);
   };
 
   // В канал уходит JPEG: в несколько раз легче PNG, Telegram всё равно пережимает картинку
   const publish = async () => {
-    setConfirming(false);
-    setSending(true);
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvasRef.current ? canvasRef.current.toBlob(resolve, "image/jpeg", 0.92) : resolve(null),
-    );
+    setState("sending");
+    setError("");
+    const blob = await toBlob("image/jpeg", 0.92);
     if (!blob || caption === undefined) {
-      setSending(false);
+      setState("error");
+      setError("картинка не готова");
       return;
     }
     const form = new FormData();
     form.append("key", fileName.replace(/\.png$/, ""));
     form.append("photo", blob, fileName.replace(/\.png$/, ".jpg"));
     form.append("caption", caption);
-    const result = await publishPostAction(form);
-    setSending(false);
-    if (result.error) setMessage(`Не опубликовано: ${result.error}`);
-    else {
+    try {
+      const result = await publishPostAction(form);
+      if (result.error) throw new Error(result.error);
       setSentUrl(result.url);
-      setMessage("Опубликовано");
+      setState("sent");
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+      setState("error");
     }
   };
 
-  const wasSent = Boolean(published) || Boolean(sentUrl);
+  // Первый раз публикуем сразу; повторно (пост уже в канале) только после «Да»
+  const onPublish = () => (wasSent && state !== "confirm" ? setState("confirm") : void publish());
+
+  const publishLabel = {
+    idle: wasSent ? "Опубликовать ещё раз" : "Опубликовать в канал",
+    confirm: "Да, выложить повторно",
+    sending: "Публикую…",
+    sent: "Опубликовано ✓",
+    error: "Повторить публикацию",
+  }[state];
+
+  const link = sentUrl ?? published?.url;
 
   return (
     <div>
       <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} className="w-full max-w-md rounded-2xl ring-1 ring-slate-200" />
       <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
-        <button type="button" onClick={download} className="rounded-xl bg-slate-900 px-4 py-2 font-semibold text-white hover:bg-slate-700">
+        <button type="button" onClick={download} className="rounded-xl bg-slate-900 px-4 py-2 font-semibold text-white transition hover:bg-slate-700 active:scale-95">
           Скачать картинку
         </button>
-        <button type="button" onClick={copy} className="rounded-xl px-4 py-2 font-medium text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50">
-          Скопировать
+        <button type="button" onClick={copy} className="rounded-xl px-4 py-2 font-medium text-slate-700 ring-1 ring-slate-300 transition hover:bg-slate-50 active:scale-95">
+          {copyLabel}
         </button>
-        {channel && caption !== undefined && !confirming && (
+        {channel && caption !== undefined && (
           <button
             type="button"
-            onClick={() => setConfirming(true)}
-            disabled={sending}
-            className="rounded-xl bg-brand-600 px-4 py-2 font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+            onClick={onPublish}
+            disabled={state === "sending" || state === "sent"}
+            data-state={state}
+            className={`rounded-xl px-4 py-2 font-semibold text-white transition active:scale-95 disabled:cursor-default ${
+              state === "sent" ? "bg-emerald-600" : state === "sending" ? "animate-pulse bg-brand-600" : "bg-brand-600 hover:bg-brand-700"
+            }`}
           >
-            {sending ? "Публикую…" : wasSent ? "Опубликовать ещё раз" : "Опубликовать в канал"}
+            {publishLabel}
           </button>
         )}
-        {confirming && (
-          <span className="flex items-center gap-2">
-            <span className="text-slate-600">Выложить в {channel}{wasSent ? " повторно" : ""}?</span>
-            <button type="button" onClick={publish} className="rounded-xl bg-brand-600 px-3 py-2 font-semibold text-white hover:bg-brand-700">
-              Да
-            </button>
-            <button type="button" onClick={() => setConfirming(false)} className="rounded-xl px-3 py-2 text-slate-600 ring-1 ring-slate-300">
-              Нет
-            </button>
-          </span>
+        {state === "confirm" && (
+          <button type="button" onClick={() => setState("idle")} className="rounded-xl px-3 py-2 text-slate-600 ring-1 ring-slate-300">
+            Отмена
+          </button>
         )}
-        {message && <span className="text-slate-500">{message}</span>}
       </div>
+      {state === "error" && <p className="mt-2 text-xs text-red-700">Не опубликовано: {error}</p>}
       {wasSent && (
         <p className="mt-2 text-xs text-emerald-700">
-          Уже в канале{published && !sentUrl ? ` с ${new Date(published.at).toLocaleString("ru-RU")}` : ""}
-          {(sentUrl ?? published?.url)?.startsWith("http") && (
+          {state === "sent" ? "Пост в канале" : `Уже в канале с ${new Date(published!.at).toLocaleString("ru-RU")}`}
+          {link?.startsWith("http") && (
             <>
               :{" "}
-              <a href={sentUrl ?? published?.url} target="_blank" rel="noreferrer" className="underline">
+              <a href={link} target="_blank" rel="noreferrer" className="underline">
                 открыть пост
               </a>
             </>
