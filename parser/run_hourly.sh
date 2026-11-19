@@ -23,7 +23,7 @@ PYTHON="$PARSER_DIR/.venv/bin/python"
 export PYTHONUNBUFFERED=1
 {
     echo "===== $(date '+%d.%m.%Y %H:%M') часовой ====="
-    caffeinate -i "$PYTHON" tg_download.py --quick | grep --line-buffered -E "готово|ошибка"
+    caffeinate -i "$PYTHON" tg_download.py --quick | grep --line-buffered -E "готово|ошибка|нет каналов|остановлен"
     "$PYTHON" tg_parse.py | tail -4
     if ! pgrep -f "tg_video.py" >/dev/null; then
         caffeinate -i "$PYTHON" tg_video.py --only download --light-only --days 2 | grep "^Видео"
@@ -31,9 +31,12 @@ export PYTHONUNBUFFERED=1
     "$PYTHON" export_to_site.py | grep -E "^Выгружено"
     # Свежие фото сразу уезжают на Google Диск, на Маке остаются ссылки
     "$PYTHON" archive.py | grep -E "перенесено|не принимает|пропущен|не настроен"
-    # Карточки: забрать ответы очереди Google, которые не успели прийти в ежедневном прогоне
-    if [ -f data/cards.on ] && grep -qs '"collected": false' data/_cards/*/state.json; then
-        "$PYTHON" cards_daily.py collect | grep -E "^Карточки|^Сайт|Диск не принял"
+    # Карточки сразу (решение Ника 19.11.2026): новые посты в обработку, видео и описания обычными
+    # запросами (ответ за минуты), обложки и сетки очередью Google. Ответы очереди забирает run_collect.sh
+    if [ -f data/cards.on ]; then
+        caffeinate -i "$PYTHON" cards_daily.py fresh | grep --line-buffered -E "^Карточки|^Шаг|^Сайт|Пакет|Диск не принял|ошибка"
+        # Цена из голоса и фото для объявлений без цены: забрать готовое и отправить новые
+        "$PYTHON" price_fill.py run --limit 100 | grep -E "^Цена"
     fi
     echo "===== $(date '+%H:%M') конец"
 } 2>&1 | tee -a "$LOG"

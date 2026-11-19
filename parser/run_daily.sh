@@ -56,6 +56,10 @@ notify_stage() { "$PYTHON" tg_bot.py stage "$1" --log "$LOG" >/dev/null 2>&1 || 
     fi
     notify_stage video
     echo
+    # Цена из голоса и с фото (price_fill.py): забираем готовые ответы Gemini до сборки сайта
+    if [ -f data/cards.on ]; then
+        "$PYTHON" price_fill.py check
+    fi
     # Сайт собираем всегда из того, что есть на диске
     "$PYTHON" export_to_site.py | grep -v "^  [A-Za-z0-9_.]*: [0-9]* объявлений$"
     notify_stage site
@@ -69,8 +73,11 @@ notify_stage() { "$PYTHON" tg_bot.py stage "$1" --log "$LOG" >/dev/null 2>&1 || 
     # Включается файлом data/cards.on (touch data/cards.on), выключается его удалением.
     if [ -f data/cards.on ]; then
         echo
-        caffeinate -i "$PYTHON" cards_daily.py run --wait 45
+        # Добор за 3 дня: что не успели часовые запуски (ролик скачался поздно, упёрлись в потолок)
+        caffeinate -i "$PYTHON" cards_daily.py fresh --days 3
         notify_stage cards
+        # Объявления без цены в тексте: спрашиваем Gemini (фото и звук ролика), ответ заберём в следующий прогон
+        caffeinate -i "$PYTHON" price_fill.py start --limit 300
     fi
     echo "===== $(date '+%d.%m.%Y %H:%M') конец ====="
     echo

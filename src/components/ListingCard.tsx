@@ -4,12 +4,13 @@ import Link from "next/link";
 import { ListingPhoto } from "./ListingPhoto";
 import { Freshness } from "./Freshness";
 import { formatMileage, formatPrice } from "@/lib/format";
-import { listingTitle, MARKET_COLORS, MARKET_LABELS, priceInSum, PRICE_TYPE_LABELS, SOURCE_LABELS, type Listing } from "@/lib/listings";
+import { listingTitle, rangeText, MARKET_COLORS, MARKET_LABELS, priceInSum, PRICE_TYPE_LABELS, SOURCE_LABELS, type Listing } from "@/lib/listings";
 
 export function ListingCard({ listing }: { listing: Listing }) {
   // Показываем только то, что известно: у Instagram-объявлений нет коробки, топлива и т.п.
   const details = [
     listing.mileage !== undefined && formatMileage(listing.mileage),
+    rangeText(listing),
     listing.transmission,
     listing.fuel,
   ].filter(Boolean);

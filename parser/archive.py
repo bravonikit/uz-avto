@@ -78,10 +78,16 @@ def backup_data(data_dir: Path, archive_dir: Path, dry_run: bool) -> int:
         target = archive_dir / "backup" / relative
         if same_file(source, target):
             continue
-        copied += 1
         if not dry_run:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+            except OSError as error:
+                # Диск иногда отказывает («Resource deadlock avoided»): этот файл повторим в следующий запуск,
+                # а перенос фото ниже всё равно должен пройти
+                print(f"Резервная копия: Диск не принял {relative} ({error.strerror or error}), повторю позже")
+                continue
+        copied += 1
     return copied
 
 

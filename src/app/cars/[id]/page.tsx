@@ -22,6 +22,7 @@ import {
   PHOTO_QUALITY_NOTES,
   PRICE_TYPE_LABELS,
   SOURCE_LABELS,
+  type Listing,
 } from "@/lib/listings";
 import { findListing } from "@/lib/published";
 
@@ -79,6 +80,7 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
       ["Топливо", listing.fuel],
       ["Коробка", listing.transmission],
       ["Привод", listing.drive],
+      ...evSpecs(listing),
       ["Город", listing.city],
     ] as const
   ).filter(([, value]) => value !== undefined);
@@ -165,10 +167,26 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
                   <span className="font-medium">Из видео продавца:</span> {listing.speech}
                 </p>
               )}
+              {listing.transcriptRu && listing.transcriptLang !== "ru" && (
+                <details open className="mt-3 text-slate-700">
+                  <summary className="cursor-pointer text-sm font-medium text-slate-500 hover:text-slate-700">
+                    Что говорит продавец в видео (перевод на русский)
+                  </summary>
+                  <p className="mt-2 whitespace-pre-line text-sm leading-relaxed">{listing.transcriptRu}</p>
+                </details>
+              )}
+              {listing.transcriptUz && listing.transcriptLang !== "uz" && (
+                <details className="mt-2 text-slate-700" lang="uz">
+                  <summary className="cursor-pointer text-sm font-medium text-slate-500 hover:text-slate-700">
+                    Sotuvchi videoda nima deydi (oʻzbekcha)
+                  </summary>
+                  <p className="mt-2 whitespace-pre-line text-sm leading-relaxed">{listing.transcriptUz}</p>
+                </details>
+              )}
               {listing.transcript && (
                 <details className="mt-2 text-slate-700">
                   <summary className="cursor-pointer text-sm font-medium text-slate-500 hover:text-slate-700">
-                    Что говорит продавец в видео, дословно
+                    Что говорит продавец в видео, дословно{listing.transcriptLang === "uz" ? " (на узбекском)" : listing.transcriptLang === "mixed" ? " (узбекский и русский)" : ""}
                   </summary>
                   <p className="mt-2 whitespace-pre-line text-sm leading-relaxed">{listing.transcript}</p>
                   <p className="mt-1 text-xs text-slate-400">Расшифровка сделана автоматически, возможны ошибки в словах.</p>
@@ -197,6 +215,20 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
                 ≈ {formatPrice(priceInSum(listing))} по тестовому курсу
               </p>
             )}
+            {listing.priceFrom && !listing.isSold && (
+              <p className="mt-1 text-xs text-slate-500">
+                {listing.priceFrom.source === "voice"
+                  ? `В тексте цены нет, продавец назвал её в ролике${listing.priceFrom.approx ? " приблизительно" : ""}.`
+                  : "В тексте цены нет, она написана на фото объявления."}{" "}
+                Уточняйте у продавца.
+              </p>
+            )}
+            {listing.priceOriginal && (
+              <p className="mt-1 text-xs text-slate-500">
+                У продавца цена в евро: {listing.priceOriginal.value.toLocaleString("ru-RU")} €, пересчитали в доллары
+                примерно.
+              </p>
+            )}
             {listing.priceType && (
               <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
                 {PRICE_TYPE_LABELS[listing.priceType]}: это цена не за машину в наличии, уточняйте у продавца
@@ -211,7 +243,7 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
                 <p className="text-slate-600">
                   Похожие машины: около {formatPrice(listing.market.price, "USD")}, обычно от{" "}
                   {formatPrice(listing.market.low, "USD")} до {formatPrice(listing.market.high, "USD")}. Сравнили с{" "}
-                  {listing.market.count} объявлениями той же модели и близкого года.
+                  {listing.market.count} объявлениями той же модели и близкого года, с поправкой на пробег и год.
                 </p>
               </div>
             )}
@@ -313,4 +345,18 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
       )}
     </div>
   );
+}
+
+// Электромобили и гибриды: запас хода и батарея, если продавец их назвал (parser/ev_specs.py)
+function evSpecs(listing: Listing): [string, string | undefined][] {
+  const ev = listing.ev;
+  if (!ev) return [];
+  const km = (value?: number) => (value ? `${value.toLocaleString("ru-RU")} км` : undefined);
+  return [
+    ["Тип", listing.fuel ? undefined : ev.powertrain === "hybrid" ? "Гибрид" : ev.powertrain === "ev" ? "Электромобиль" : undefined],
+    [ev.powertrain === "hybrid" ? "Запас хода на электричестве" : "Запас хода", km(ev.rangeKm)],
+    ["Общий запас хода", km(ev.rangeTotalKm)],
+    ["Проходит сейчас", km(ev.rangeNowKm)],
+    ["Батарея", ev.batteryPct ? `${ev.batteryPct}%` : undefined],
+  ];
 }

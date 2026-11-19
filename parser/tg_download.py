@@ -121,7 +121,8 @@ def load_channels() -> list[tuple[str, str | None]]:
         pairs = [pair for pair in pairs if not index.find("telegram", pair[0], "")["opted_out"]]
     except FileNotFoundError:
         pass
-    wanted = {name.lower() for name in sys.argv[1:]}
+    # Флаги вроде --quick это не каналы (до 19.11.2026 из-за этого часовой режим не качал ничего)
+    wanted = {name.lower() for name in sys.argv[1:] if not name.startswith("-")}
     if wanted:
         pairs = [pair for pair in pairs if pair[0].lower() in wanted]
     return pairs

@@ -6,6 +6,7 @@ import instagramPosts from "@/data/instagram-listings.json";
 import channelPhotoQuality from "@/data/channel-photo-quality.json";
 import previewOverlay from "@/data/preview-overlay.json";
 import cardsOverlay from "@/data/cards-overlay.json";
+import videoFramesOverlay from "@/data/video-frames-overlay.json";
 import type { BODY_TYPES, DRIVES, FUEL_TYPES, TRANSMISSIONS } from "./catalog";
 import { parseNumber } from "./format";
 
@@ -91,12 +92,47 @@ export type Listing = {
   summary?: string; // короткое описание на русском: пересказ текста поста (parser/cards_daily.py)
   speech?: string; // пересказ того, что продавец говорит в ролике
   transcript?: string; // всё, что сказано в ролике, дословно, на языке оригинала
+  transcriptLang?: "uz" | "ru" | "mixed"; // на каком языке говорит продавец
+  transcriptRu?: string; // перевод расшифровки на русский
+  transcriptUz?: string; // перевод расшифровки на узбекский, латиница
+  // Электромобили и гибриды (parser/ev_specs.py и price_fill.py): запас хода и батарея, если продавец их назвал
+  ev?: { powertrain?: "ev" | "hybrid"; rangeKm?: number; rangeTotalKm?: number; rangeNowKm?: number; batteryPct?: number };
+  priceFrom?: { source: "voice" | "image"; approx: boolean }; // цены нет в тексте: взята из голоса или с фото (price_fill.py)
+  priceOriginal?: { value: number; currency: "EUR" }; // продавец указал цену в евро, на сайте она в долларах
   photoQuality: PhotoQuality; // качество фото канала, от него зависят пометка и место в выдаче
   isSold?: boolean; // продавец пометил пост как проданный ("BARAKA BOLDI", "ПРОДАНО")
   soldAt?: string; // когда продана: известно, только если «продано» пришло отдельным постом
   daysToSell?: number; // за сколько дней продана, от первой публикации
   createdAt: string;
 };
+
+type EvFields = {
+  powertrain?: string | null;
+  range_km?: number | null;
+  range_total_km?: number | null;
+  range_now_km?: number | null;
+  battery_pct?: number | null;
+};
+
+function evOf(post: EvFields): Listing["ev"] {
+  const ev = {
+    powertrain: post.powertrain === "ev" || post.powertrain === "hybrid" ? (post.powertrain as "ev" | "hybrid") : undefined,
+    rangeKm: post.range_km ?? undefined,
+    rangeTotalKm: post.range_total_km ?? undefined,
+    rangeNowKm: post.range_now_km ?? undefined,
+    batteryPct: post.battery_pct ?? undefined,
+  };
+  return ev.rangeKm || ev.rangeTotalKm || ev.batteryPct ? ev : undefined;
+}
+
+// Запас хода одной строкой для карточки: "605 км хода" или у гибрида "150 км на электричестве"
+export function rangeText(listing: Listing): string | undefined {
+  const ev = listing.ev;
+  if (!ev) return undefined;
+  if (ev.rangeKm) return ev.powertrain === "hybrid" ? `${ev.rangeKm} км на электричестве` : `${ev.rangeKm} км хода`;
+  if (ev.rangeTotalKm) return `${ev.rangeTotalKm} км общий запас`;
+  return undefined;
+}
 
 // Грузовые и мотоциклы (тип из справочника моделей parser/models_ref.py) в ленту легковых не берём
 const INSTAGRAM_LISTINGS: Listing[] = instagramPosts
@@ -141,6 +177,17 @@ const INSTAGRAM_LISTINGS: Listing[] = instagramPosts
   isSold: post.is_sold,
   // Этих полей нет в старых выгрузках и у Instagram, поэтому читаем их как необязательные
   soldAt: (post as { sold_at?: string | null }).sold_at ?? undefined,
+  ev: evOf(post as EvFields),
+  priceFrom: (() => {
+    const source = (post as { price_source?: string | null }).price_source;
+    return source === "voice" || source === "image"
+      ? { source, approx: Boolean((post as { price_approx?: boolean | null }).price_approx) }
+      : undefined;
+  })(),
+  priceOriginal: (() => {
+    const original = (post as { price_original?: { value: number; currency: string } | null }).price_original;
+    return original?.currency === "EUR" ? { value: original.value, currency: "EUR" as const } : undefined;
+  })(),
   daysToSell: (post as { days_to_sell?: number | null }).days_to_sell ?? undefined,
   createdAt: post.date,
 }));
@@ -163,14 +210,21 @@ type PreviewEntry = {
   description?: string;
   speech?: string;
   transcript?: string;
+  transcriptLang?: "uz" | "ru" | "mixed";
+  transcriptRu?: string;
+  transcriptUz?: string;
 };
 const PREVIEW_LISTINGS = (IS_PREVIEW ? (previewOverlay as { listings: unknown }).listings : {}) as Record<string, PreviewEntry>;
 // Постоянная обработка карточек (parser/cards_daily.py): обложки, фото из видео, цена и пробег из ролика, описания.
 // Подставляется всегда, на обоих сайтах. Проба «стало» идёт поверх неё.
 const CARD_LISTINGS = (cardsOverlay as { listings: unknown }).listings as Record<string, PreviewEntry>;
 
+// Бесплатные обложки из кадров ролика (parser/video_covers.py) для старых объявлений «только видео»:
+// вместо превью Telegram (часто лицо продавца) кадр, где машина видна целиком. Карточки cards_daily.py идут поверх.
+const FRAME_LISTINGS = (videoFramesOverlay as { listings: unknown }).listings as Record<string, PreviewEntry>;
+
 function applyPreview(listing: Listing): Listing {
-  return applyEntry(applyEntry(listing, CARD_LISTINGS[listing.id]), PREVIEW_LISTINGS[listing.id]);
+  return applyEntry(applyEntry(applyEntry(listing, FRAME_LISTINGS[listing.id]), CARD_LISTINGS[listing.id]), PREVIEW_LISTINGS[listing.id]);
 }
 
 function applyEntry(listing: Listing, entry: PreviewEntry | undefined): Listing {
@@ -187,6 +241,9 @@ function applyEntry(listing: Listing, entry: PreviewEntry | undefined): Listing 
     summary: entry.description ?? listing.summary,
     speech: entry.speech ?? listing.speech,
     transcript: entry.transcript ?? listing.transcript,
+    transcriptLang: entry.transcriptLang ?? listing.transcriptLang,
+    transcriptRu: entry.transcriptRu ?? listing.transcriptRu,
+    transcriptUz: entry.transcriptUz ?? listing.transcriptUz,
     preview: entry.kind
       ? { kind: entry.kind, priceSource: takesPrice ? entry.priceSource : undefined, priceApprox: takesPrice ? entry.priceApprox : undefined }
       : listing.preview,

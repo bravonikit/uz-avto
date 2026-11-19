@@ -16,13 +16,25 @@
   .venv/bin/python cards_daily.py run --wait 0        отправить и не ждать (ответы заберёт следующий запуск)
   .venv/bin/python cards_daily.py collect             только забрать готовое и выложить, новый день не начинать
   .venv/bin/python cards_daily.py status              что по дням: отправлено, получено, сколько стоило
+  .venv/bin/python cards_daily.py fresh               новые посты с прошлого запуска (так каждый час, run_hourly.sh)
+  .venv/bin/python cards_daily.py fresh --days 3      то же, но смотреть посты за 3 дня (ночной добор, run_daily.sh)
+
+Режим fresh (решение Ника 19.11.2026: обрабатывать сразу, а не раз в день за вчера):
+  * берёт объявления последних --days дней, которые ещё не обрабатывались (нет на сайте и ни в одном запуске);
+  * объявление только с видео ждёт, пока ролик скачается (лёгкие качает часовой прогон, тяжёлые run_video.sh);
+  * видео и описания идут обычными запросами (ответ сразу), дорисовка и сетки очередью Google (вдвое дешевле);
+  * потолок расходов --budget действует на сутки по Ташкенту на все запуски вместе, учёт в data/_cards/spend.json;
+  * ответы очереди забирает run_collect.sh каждые 15 минут и сразу выкладывает на сайт.
+Папка запуска: data/_cards/<день>_<ЧЧММ>/, как у дневных.
 """
 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import shutil
+import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -206,7 +218,12 @@ def card_record(listing_id: str, day: str, entry: dict, photo_row: dict | None, 
     if video_row and video_row.get("speech_ru"):
         record["speech"] = {"source": "пересказ речи продавца в ролике", "text": video_row["speech_ru"]}
     if video_row and video_row.get("transcript"):
-        record["transcript"] = {"source": "дословная расшифровка речи в ролике, язык оригинала", "file": "transcript.txt"}
+        record["transcript"] = {"source": "дословная расшифровка речи в ролике, язык оригинала", "file": "transcript.txt",
+                                "language": video_row.get("transcript_lang")}
+        for lang in ("ru", "uz"):
+            if video_row.get(f"transcript_{lang}"):
+                record[f"transcript_{lang}"] = {"source": f"перевод расшифровки ({'русский' if lang == 'ru' else 'узбекский, латиница'})",
+                                                "file": f"transcript_{lang}.txt"}
     return record
 
 
@@ -233,6 +250,11 @@ def archive_result(archive: Path | None, cards: CardIndex, listing_id: str, reco
         if record.get("transcript") and (work / "video.json").exists():
             spoken = json.loads((work / "video.json").read_text(encoding="utf-8")).get("transcript") or ""
             (card / "transcript.txt").write_text(spoken.strip() + "\n", encoding="utf-8")
+            answer = json.loads((work / "video.json").read_text(encoding="utf-8"))
+            for lang in ("ru", "uz"):
+                text = answer.get(f"transcript_{lang}")
+                if isinstance(text, str) and text.strip():
+                    (card / f"transcript_{lang}.txt").write_text(text.strip() + "\n", encoding="utf-8")
         return True
     except OSError as error:
         print(f"  {listing_id}: Диск не принял итог ({error}). Повторю в следующий запуск")
@@ -331,6 +353,109 @@ def run(day: str, wait_minutes: int, budget: float) -> None:
     publish_all()
 
 
+SPEND_FILE = ROOT / "spend.json"
+LOCK_FILE = ROOT / ".cards.lock"
+FRESH_MAX_ITEMS = 80  # больше за один запуск не берём: остальное следующим
+
+
+def cards_lock():
+    """Один процесс обработки карточек за раз (часовой fresh и 15-минутный collect не мешают друг другу).
+    Возвращает открытый файл замка или None, если занято."""
+    ROOT.mkdir(parents=True, exist_ok=True)
+    handle = open(LOCK_FILE, "w")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
+ATTEMPTS_FILE = ROOT / "attempts.json"
+MAX_ATTEMPTS = 3  # объявление, по которому три запуска подряд ничего не вышло (Диск не отдал фото и т.п.), больше не берём
+
+
+def processed_ids() -> set[str]:
+    """Объявления, которые уже обработаны: есть на сайте, есть результат в любом запуске или кончились попытки."""
+    ids = set(load_overlay())
+    for folder in day_folders():
+        state = bd.load_state(folder)
+        for key in ("photo", "video", "text"):
+            ids.update(row["id"] for row in state.get(key) or [])
+    attempts = json.loads(ATTEMPTS_FILE.read_text(encoding="utf-8")) if ATTEMPTS_FILE.exists() else {}
+    ids.update(key for key, count in attempts.items() if count >= MAX_ATTEMPTS)
+    return ids
+
+
+def item_cost(item: dict) -> float:
+    """Оценка расходов на одно объявление (видео и описания обычными запросами: вдвое дороже очереди)."""
+    text = PRICE_TEXT * 2 if len((item.get("description") or "").strip()) >= bd.TEXT_MIN_CHARS else 0.0
+    if item.get("has_video") and len(item.get("images") or []) <= 1:
+        return PRICE_VIDEO * 2 + SHARE_GRID * PRICE_GRID + text
+    return SHARE_OUTPAINT * PRICE_OUTPAINT + text
+
+
+def fresh(days: int, budget: float) -> None:
+    lock = cards_lock()
+    if lock is None:
+        print("Карточки: обработка уже идёт в другом процессе, пропускаю")
+        return
+    api = bd.client()
+    collect_all(api)  # сначала забрать готовое из очереди
+    now = datetime.now(bd.TASHKENT)
+    window = {(now - timedelta(days=n)).strftime("%Y-%m-%d") for n in range(days + 1)}
+    archive, cards = archive_dir_from_env(), CardIndex()
+    skip: set[str] = set()
+    for day in sorted(window):
+        skip |= reuse_reposts(day, archive, cards)  # повторы получают готовую карточку бесплатно
+    done = processed_ids()
+    listings = json.loads((bd.TG_DIR / "listings.json").read_text(encoding="utf-8"))
+    places, posts_cache = bd.Places(), {}
+    ready, waiting_video = [], 0
+    for item in listings:
+        day = datetime.fromisoformat(item["date"].replace("Z", "+00:00")).astimezone(bd.TASHKENT).strftime("%Y-%m-%d")
+        if day not in window or item["id"] in done or item["id"] in skip or not candidate(item, day):
+            continue
+        if item.get("has_video") and len(item.get("images") or []) <= 1:
+            channel = item["source_account"]
+            if not places.raw(channel, bd.video_post(channel, item["id"].rsplit("-", 1)[1], posts_cache)).exists():
+                waiting_video += 1
+                continue  # ролик ещё не скачан: возьмём в следующий запуск
+        elif not item.get("images"):
+            continue
+        ready.append(item)
+    ready.sort(key=lambda item: item["date"], reverse=True)  # свежие первыми
+
+    spend = json.loads(SPEND_FILE.read_text(encoding="utf-8")) if SPEND_FILE.exists() else {}
+    today = now.strftime("%Y-%m-%d")
+    left = budget - spend.get(today, 0.0)
+    chosen, planned = [], 0.0
+    for item in ready[:FRESH_MAX_ITEMS]:
+        cost = item_cost(item)
+        if planned + cost > left:
+            break
+        chosen.append(item)
+        planned += cost
+    print(f"Карточки, свежие: новых {len(ready)}, ждут скачивания ролика {waiting_video}, берём {len(chosen)}, "
+          f"оценка ${planned:.2f}, потрачено сегодня ${spend.get(today, 0.0):.2f} из ${budget:.2f}", flush=True)
+    if len(chosen) < len(ready) and planned + (item_cost(ready[len(chosen)]) if len(chosen) < len(ready) else 0) > left:
+        print("Карточки: дневной потолок расходов, остальное завтра (поднять: --budget)", flush=True)
+    if chosen:
+        key = now.strftime("%Y-%m-%d_%H%M")
+        bd.ONLY_IDS = {item["id"] for item in chosen}
+        bd.SKIP_IDS = set()
+        bd.SYNC_STEPS = {"video", "text"}
+        spend[today] = round(spend.get(today, 0.0) + planned, 3)
+        SPEND_FILE.write_text(json.dumps(spend, indent=1), encoding="utf-8")  # до отправки: падение не обнулит учёт
+        attempts = json.loads(ATTEMPTS_FILE.read_text(encoding="utf-8")) if ATTEMPTS_FILE.exists() else {}
+        for item_id in bd.ONLY_IDS:
+            attempts[item_id] = attempts.get(item_id, 0) + 1
+        ATTEMPTS_FILE.write_text(json.dumps(attempts, indent=0), encoding="utf-8")
+        bd.start(key)
+    publish_all()
+    lock.close()
+
+
 def status() -> None:
     total = 0.0
     for folder in day_folders():
@@ -342,16 +467,24 @@ def status() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Ежедневная обработка карточек")
-    parser.add_argument("command", choices=["run", "collect", "status"])
+    parser.add_argument("command", choices=["run", "collect", "status", "fresh"])
     parser.add_argument("day", nargs="?", help="день по Ташкенту, по умолчанию вчера")
     parser.add_argument("--wait", type=int, default=45, help="сколько минут ждать ответы очереди Google")
     parser.add_argument("--budget", type=float, default=6.0, help="потолок расходов на один день, доллары")
+    parser.add_argument("--days", type=int, default=1, help="fresh: за сколько последних дней смотреть посты")
     args = parser.parse_args()
     if args.command == "status":
         status()
     elif args.command == "collect":
+        lock = cards_lock()
+        if lock is None:
+            print("Карточки: обработка уже идёт в другом процессе, пропускаю")
+            sys.exit(0)
         collect_all(bd.client())
         publish_all()
+        lock.close()
+    elif args.command == "fresh":
+        fresh(args.days, args.budget)
     else:
         day = args.day or (datetime.now(bd.TASHKENT) - timedelta(days=1)).strftime("%Y-%m-%d")
         run(day, args.wait, args.budget)

@@ -84,6 +84,12 @@ D. Transcript. Write "transcript": everything people say in the video, word for 
 do not shorten, do not correct. Prices and phone numbers stay as said. Music and song lyrics are not speech.
 If nobody speaks, set "transcript": "".
 
+E. Translations of the transcript. "transcript_lang": the main spoken language, "uz", "ru" or "mixed".
+"transcript_ru": the whole transcript translated into Russian. "transcript_uz": the whole transcript translated into
+Uzbek in the Latin script (o', g', sh, ch). Translate everything that was said, do not summarise and do not add anything.
+Keep numbers, prices and phone numbers exactly as said. If the transcript is already fully in that language, copy it
+(for Uzbek, write it in Latin). If nobody speaks, set all three to null.
+
 Answer only JSON:
 {"car": "make model colour as seen", "duration": seconds, "cars_in_video": number,
  "front_3q": [{"t": seconds}], "front": [...], "side": [...], "rear_3q": [...], "rear": [...], "interior": [...],
@@ -92,7 +98,8 @@ Answer only JSON:
  "year": {"value": number, "source": "overlay"|"voice"} | null,
  "mileage_km": {"value": number, "source": "overlay"|"voice"} | null,
  "speech_ru": "summary in Russian" | null,
- "transcript": "word for word" }"""
+ "transcript": "word for word",
+ "transcript_lang": "uz"|"ru"|"mixed" | null, "transcript_ru": "..." | null, "transcript_uz": "..." | null }"""
 
 # Описание из текста поста: короткий пересказ на русском, только факты
 TEXT_PROMPT = """Ниже текст объявления о продаже автомобиля из Telegram канала в Узбекистане.
@@ -149,8 +156,57 @@ def submit(api, folder: Path, name: str, model: str, lines: list[dict]) -> dict:
             "collected": False}
 
 
+class SyncJob:
+    """Ответы обычных (не пакетных) запросов в том же виде, что у пакетного задания: results() отдаёт их как есть."""
+
+    def __init__(self, items: dict[str, dict]) -> None:
+        self.items = items
+
+
+def _one_sync(api, model: str, line: dict) -> tuple[str, dict | None, str | None]:
+    request = line["request"]
+    for attempt in range(3):
+        try:
+            response = api.models.generate_content(model=model, contents=request["contents"],
+                                                   config=request.get("generationConfig"))
+            item = {"key": line["key"], "response": response.model_dump(mode="json", by_alias=True, exclude_none=True),
+                    "_sync": True}
+            return line["key"], item, None
+        except Exception as error:  # noqa: BLE001
+            message = f"{type(error).__name__}: {str(error)[:200]}"
+            time.sleep(5 * (attempt + 1))
+    return line["key"], None, message
+
+
+def run_sync(api, model: str, lines: list[dict], workers: int = 4) -> tuple["SyncJob", dict[str, str]]:
+    """Обычные запросы параллельно, ответ за минуту-две, но вдвое дороже очереди.
+    Возвращает ответы и ошибки по ключам. Если не прошёл ни один запрос, бросает исключение (вызывающий уйдёт в очередь)."""
+    from concurrent.futures import ThreadPoolExecutor
+    items, failed = {}, {}
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for key, item, error in pool.map(lambda line: _one_sync(api, model, line), lines):
+            if item is not None:
+                items[key] = item
+            else:
+                failed[key] = error
+    if lines and not items:
+        raise RuntimeError(f"ни один обычный запрос не прошёл: {next(iter(failed.values()))}")
+
+    def parses(item: dict) -> bool:
+        try:
+            json.loads(text_of(item))
+            return True
+        except ValueError:
+            return False
+    if not any(parses(item) for item in items.values()):
+        raise RuntimeError("ответы пришли, но ни один не разобрался как JSON")
+    return SyncJob(items), failed
+
+
 def results(api, job) -> dict[str, dict]:
-    """Ответы пакетного задания по ключам запросов."""
+    """Ответы пакетного задания (или обычных запросов SyncJob) по ключам запросов."""
+    if isinstance(job, SyncJob):
+        return job.items
     raw = api.files.download(file=job.dest.file_name)
     out = {}
     for line in raw.decode("utf-8").splitlines():
@@ -185,6 +241,8 @@ def cost_of(item: dict, model: str) -> tuple[float, int]:
     thoughts = usage.get("thoughtsTokenCount") or 0
     answer = usage.get("candidatesTokenCount") or 0
     price = PRICE[model]
+    if item.get("_sync"):
+        price = {k: v * 2 for k, v in price.items()}  # обычный запрос вдвое дороже очереди
     is_image = model == IMAGE_MODEL
     dollars = (prompt * price["in"] + thoughts * price["out"] + answer * (price["image"] if is_image else price["out"])) / 1e6
     return dollars, usage.get("totalTokenCount") or (prompt + thoughts + answer)
@@ -201,6 +259,28 @@ def video_post(channel: str, listing_post: str, cache: dict) -> str:
 
 # Объявления, которые не надо обрабатывать: повторы с готовой карточкой и перепосты (ставит cards_daily.py)
 SKIP_IDS: set[str] = set()
+# Режим «свежие» (cards_daily.py fresh): обработать ровно эти объявления, а не все объявления дня
+ONLY_IDS: set[str] | None = None
+# Шаги, которые идут обычными запросами, а не очередью Google: ответ сразу, вдвое дороже.
+# Решение Ника 19.11.2026: видео и описания сразу (дёшево), дорисовка и сетки очередью (там почти все деньги)
+SYNC_STEPS: set[str] = set()
+
+
+def _submit_or_sync(api, folder: Path, state: dict, name: str, model: str, lines: list[dict], collector) -> None:
+    """Шаг обычными запросами с немедленным разбором ответов, а если не вышло, очередью Google как раньше."""
+    if name in SYNC_STEPS:
+        try:
+            job, failed = run_sync(api, model, lines)
+            state["jobs"][name] = {"job": "sync", "model": model, "requests": len(lines),
+                                   "sent": datetime.now().isoformat(timespec="seconds"), "collected": False, "sync": True,
+                                   "failed_ids": sorted(failed)}
+            print(f"Шаг {name}: обычные запросы, ответов {len(job.items)} из {len(lines)}"
+                  + (f", ошибок {len(failed)}" if failed else ""), flush=True)
+            collector(api, folder, state, job)
+            return
+        except Exception as error:  # noqa: BLE001
+            print(f"Шаг {name}: обычные запросы не прошли ({str(error)[:160]}), отправляю очередью", flush=True)
+    state["jobs"][name] = submit(api, folder, name, model, lines)
 
 
 def start(day: str) -> None:
@@ -218,7 +298,8 @@ def start(day: str) -> None:
     # На сайте у них остаётся первое фото поста или кадр ролика.
     todays = [item for item in listings
               if item.get("brand") and item.get("kind") == "listing" and not item.get("is_sold")
-              and not item.get("price_type") and not item.get("removed_at") and local_day(item) == day
+              and not item.get("price_type") and not item.get("removed_at")
+              and (item["id"] in ONLY_IDS if ONLY_IDS is not None else local_day(item) == day)
               and item["id"] not in SKIP_IDS]
     places, posts_cache = Places(), {}
     video_items, photo_items = [], []
@@ -293,7 +374,7 @@ def start(day: str) -> None:
             print(f"  загружено {number} из {len(video_items)}", flush=True)
             save_state(folder, state)
     if video_lines:
-        state["jobs"]["video"] = submit(api, folder, "video", VIDEO_MODEL, video_lines)
+        _submit_or_sync(api, folder, state, "video", VIDEO_MODEL, video_lines, collect_video)
     save_state(folder, state)
 
     # Описания: пересказ текста поста на русском, для всех объявлений дня с содержательным текстом
@@ -303,7 +384,7 @@ def start(day: str) -> None:
         for item in todays if len((item.get("description") or "").strip()) >= TEXT_MIN_CHARS]
     state["text"] = []
     if text_lines:
-        state["jobs"]["text"] = submit(api, folder, "text", VIDEO_MODEL, text_lines)
+        _submit_or_sync(api, folder, state, "text", VIDEO_MODEL, text_lines, collect_text)
     save_state(folder, state)
     print("Отправлено. Ответ приходит в течение суток, обычно быстрее. Проверка: .venv/bin/python _batch_day.py check --wait")
 
@@ -322,6 +403,10 @@ def collect_outpaint(api, folder: Path, state: dict, job) -> None:
         dollars += price
     info.update({"collected": True, "got": got, "cost": round(dollars, 3)})
     print(f"Дорисовка: получено {got} из {info['requests']}, около ${dollars:.2f}", flush=True)
+
+
+def _clean_text(value) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def collect_video(api, folder: Path, state: dict, job) -> None:
@@ -348,6 +433,9 @@ def collect_video(api, folder: Path, state: dict, job) -> None:
         row.update({"car": answer.get("car"), "price_voice": answer.get("price_voice"), "price_overlay": answer.get("price_overlay"),
                     "speech_ru": answer.get("speech_ru") if isinstance(answer.get("speech_ru"), str) else None,
                     "transcript": answer.get("transcript").strip() if isinstance(answer.get("transcript"), str) and answer.get("transcript").strip() else None,
+                    "transcript_lang": answer.get("transcript_lang") if answer.get("transcript_lang") in ("uz", "ru", "mixed") else None,
+                    "transcript_ru": _clean_text(answer.get("transcript_ru")),
+                    "transcript_uz": _clean_text(answer.get("transcript_uz")),
                     "year": answer.get("year"), "mileage_km": answer.get("mileage_km"), "cars_in_video": answer.get("cars_in_video")})
         frames = {}
         for slot, count in SLOTS.items():
@@ -522,6 +610,10 @@ def build_entries(folder: Path, state: dict, put) -> dict:
             entry["speech"] = row["speech_ru"]  # пересказ того, что продавец говорит в ролике
         if row.get("transcript"):
             entry["transcript"] = row["transcript"]  # дословно, на языке оригинала (решение Ника 19.11.2026)
+        # Переводы речи на русский и узбекский латиницей (решение Ника 19.11.2026)
+        for key, field in (("transcriptLang", "transcript_lang"), ("transcriptRu", "transcript_ru"), ("transcriptUz", "transcript_uz")):
+            if row.get(field):
+                entry[key] = row[field]
         if entry:
             entries[row["id"]] = entry
     # Описание из текста поста: есть и у объявлений, где с фото ничего делать не пришлось
