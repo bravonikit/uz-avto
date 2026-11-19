@@ -33,3 +33,5 @@ export PYTHONUNBUFFERED=1
     echo "===== $(date '+%d.%m.%Y %H:%M') видео: конец ====="
     echo
 } 2>&1 | grep --line-buffered -vE "^Attempt [0-9]+ at connecting|Security error while unpacking|very old message" | tee -a "$LOG"
+# Итог видеопрогона в Telegram бот без звука (выключить: TG_VIDEO=0)
+"$PYTHON" tg_bot.py videorun "$LOG" >/dev/null 2>&1 || true

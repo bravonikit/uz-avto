@@ -37,3 +37,5 @@ export PYTHONUNBUFFERED=1
     fi
     echo "===== $(date '+%H:%M') конец"
 } 2>&1 | tee -a "$LOG"
+# Воронка «сегодня пока» в Telegram бот без звука, только если за час были новые посты (выключить: TG_HOURLY=0)
+"$PYTHON" tg_bot.py hourly "$LOG" >/dev/null 2>&1 || true

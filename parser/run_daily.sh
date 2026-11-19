@@ -31,6 +31,8 @@ export PYTHONUNBUFFERED=1
 STARTED="$(date '+%d.%m.%Y %H:%M')"
 # Кто запустил: launchd (автозапуск) или человек из терминала
 if [ -t 1 ]; then HOW="вручную"; else HOW="авто"; fi
+# Этап закончился: короткое сообщение в Telegram бот без звука (tg_bot.py). Бот не настроен: ничего
+notify_stage() { "$PYTHON" tg_bot.py stage "$1" --log "$LOG" >/dev/null 2>&1 || true; }
 {
     echo "===== $STARTED старт ($HOW) ====="
     # caffeinate не даёт Маку уснуть, пока идёт скачивание
@@ -40,7 +42,10 @@ if [ -t 1 ]; then HOW="вручную"; else HOW="авто"; fi
         && "$PYTHON" enrich.py
     echo
     # Telegram качается и разбирается отдельно: работает, даже когда Instagram недоступен
-    caffeinate -i "$PYTHON" tg_download.py && "$PYTHON" tg_parse.py | tail -4
+    caffeinate -i "$PYTHON" tg_download.py
+    notify_stage raw
+    "$PYTHON" tg_parse.py | tail -4
+    notify_stage parse
     # Лёгкие видео и кружки сразу, пока ссылки со страницы свежие (через пару часов они протухают).
     # Без аккаунта Telegram, быстро. Тяжёлые и раскадровку делает run_video.sh
     # Если видеопрогон сейчас идёт, он сам скачает и лёгкие: два процесса на одни файлы не пускаем
@@ -49,19 +54,23 @@ if [ -t 1 ]; then HOW="вручную"; else HOW="авто"; fi
     else
         caffeinate -i "$PYTHON" tg_video.py --only download --light-only | grep "^Видео"
     fi
+    notify_stage video
     echo
     # Сайт собираем всегда из того, что есть на диске
     "$PYTHON" export_to_site.py | grep -v "^  [A-Za-z0-9_.]*: [0-9]* объявлений$"
+    notify_stage site
     echo
     "$PYTHON" status.py
     echo
     # Резервная копия данных и переезд всех фото на Google Диск (на Маке остаются ссылки). Диск не подключён: шаг пропускается
     "$PYTHON" archive.py
+    notify_stage archive
     # Обработка карточек за вчера: обложки, фото из видео, описания. Платные шаги идут в очередь Google.
     # Включается файлом data/cards.on (touch data/cards.on), выключается его удалением.
     if [ -f data/cards.on ]; then
         echo
         caffeinate -i "$PYTHON" cards_daily.py run --wait 45
+        notify_stage cards
     fi
     echo "===== $(date '+%d.%m.%Y %H:%M') конец ====="
     echo
@@ -72,5 +81,5 @@ SUMMARY="$(grep -E 'Готово:|Прогон остановлен' "$LOG" | ta
 [ -z "$SUMMARY" ] && SUMMARY="прогон не дошёл до конца, смотрите $LOG"
 echo "$STARTED - $(date '+%H:%M') | $HOW | $SUMMARY" >> data/logs/history.txt
 osascript -e "display notification \"$SUMMARY\" with title \"uz-avto: парсер ($HOW)\"" 2>/dev/null || true
-# Итог прогона в Telegram бот (python tg_bot.py setup). Бот не настроен: шаг молча пропускается
+# Итог прогона в Telegram бот: статус и воронка за вчера и за сегодня (python tg_bot.py setup)
 "$PYTHON" tg_bot.py report "$LOG" --how "$HOW" --started "$STARTED" >> "$LOG" 2>&1 || true
