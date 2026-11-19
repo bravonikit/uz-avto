@@ -177,6 +177,30 @@ async function ListingContent({ params }: Pick<PageProps<"/cars/[id]">, "params"
             <p className="text-slate-500">Не указаны — смотрите описание.</p>
           )}
 
+          {(listing.summary || listing.speech) && (
+            <>
+              <h2 className="mt-8 mb-3 text-xl font-bold">Коротко о машине</h2>
+              {listing.summary && <p className="leading-relaxed text-slate-700">{listing.summary}</p>}
+              {listing.speech && (
+                <p className="mt-2 leading-relaxed text-slate-700">
+                  <span className="font-medium">Из видео продавца:</span> {listing.speech}
+                </p>
+              )}
+              {listing.transcript && (
+                <details className="mt-2 text-slate-700">
+                  <summary className="cursor-pointer text-sm font-medium text-slate-500 hover:text-slate-700">
+                    Что говорит продавец в видео, дословно
+                  </summary>
+                  <p className="mt-2 whitespace-pre-line text-sm leading-relaxed">{listing.transcript}</p>
+                  <p className="mt-1 text-xs text-slate-400">Расшифровка сделана автоматически, возможны ошибки в словах.</p>
+                </details>
+              )}
+              <p className="mt-2 text-xs text-slate-400">
+                Пересказ составлен автоматически по тексту{listing.speech ? " и ролику" : ""} продавца. Точные слова продавца ниже.
+              </p>
+            </>
+          )}
+
           <h2 className="mt-8 mb-3 text-xl font-bold">
             {listing.source ? `Описание из ${SOURCE_LABELS[listing.source.platform]}` : "Комментарий продавца"}
           </h2>

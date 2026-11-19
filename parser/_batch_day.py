@@ -4,6 +4,8 @@
   4б  дорисовка краёв обложки (у объявлений с фото, где машина не влезла в рамку 4:3)
   5б  Gemini смотрит ролик: кадры по ракурсам, цена из голоса и надписи, год, пробег
   5в  четыре фото одной сеткой из кадров (запускается после 5б, когда известны кадры)
+  6   описание на русском: пересказ текста поста (отдельный пакет) и речи продавца в ролике (в ответе 5б)
+Объявления под заказ и CIP в обработку не идут. Каждый день сам запускает cards_daily.py, он опирается на этот файл.
 Бесплатные шаги (выбор обложки, рамка, нарезка кадров, разрезание сетки) идут на Маке.
 
 Ничего не меняет в проекте и на сайте. Всё лежит в ~/Movies/uz-avto-lab/day-test/<дата>/:
@@ -72,13 +74,39 @@ Report only what is really in the video. Do not guess and do not use your knowle
 If the seller gives an approximate price ("a bit above ten thousand"), set "approx": true.
 If the video shows more than one car for sale, set "cars_in_video" accordingly and report the first car.
 
+C. Speech. If the seller talks about the car, write "speech_ru": a summary in Russian, 2 to 4 sentences, of the facts
+he says about this car only (trim, condition, repainted parts, mileage, what was replaced, documents, terms such as
+trade-in or instalments). Do not add anything he did not say, do not praise the car, do not mention prices, phone
+numbers or the channel name. If nobody speaks or nothing is said about the car, set "speech_ru": null.
+
+D. Transcript. Write "transcript": everything people say in the video, word for word, in the original language(s)
+(Uzbek, Russian or a mix), exactly as spoken, in the script they would normally write it. Do not translate,
+do not shorten, do not correct. Prices and phone numbers stay as said. Music and song lyrics are not speech.
+If nobody speaks, set "transcript": "".
+
 Answer only JSON:
 {"car": "make model colour as seen", "duration": seconds, "cars_in_video": number,
  "front_3q": [{"t": seconds}], "front": [...], "side": [...], "rear_3q": [...], "rear": [...], "interior": [...],
  "price_overlay": {"value": number, "currency": "USD"|"UZS", "t": seconds, "text": "exact overlay text"} | null,
  "price_voice": {"value": number, "currency": "USD"|"UZS", "t": seconds, "heard": "exact words", "approx": true|false} | null,
  "year": {"value": number, "source": "overlay"|"voice"} | null,
- "mileage_km": {"value": number, "source": "overlay"|"voice"} | null}"""
+ "mileage_km": {"value": number, "source": "overlay"|"voice"} | null,
+ "speech_ru": "summary in Russian" | null,
+ "transcript": "word for word" }"""
+
+# Описание из текста поста: короткий пересказ на русском, только факты
+TEXT_PROMPT = """Ниже текст объявления о продаже автомобиля из Telegram канала в Узбекистане.
+Он может быть на узбекском, русском или вперемешку, латиницей или кириллицей.
+Напиши короткое описание этой машины на русском языке для карточки на сайте: от 2 до 4 предложений.
+Только факты из текста: комплектация, состояние, крашеные детали, пробег, что меняли, документы,
+условия (торг, обмен, рассрочка). Ничего не добавляй от себя, не хвали машину и не делай выводов.
+Цену, телефоны, ссылки и название канала не упоминай. Если в тексте несколько машин, опиши первую.
+Если фактов о машине в тексте нет, верни пустую строку.
+Ответ только JSON: {"description_ru": "..."}
+
+Текст объявления:
+"""
+TEXT_MIN_CHARS = 60  # короче этого в посте пересказывать нечего
 
 
 # ---------- общее
@@ -171,6 +199,10 @@ def video_post(channel: str, listing_post: str, cache: dict) -> str:
 
 # ---------- start
 
+# Объявления, которые не надо обрабатывать: повторы с готовой карточкой и перепосты (ставит cards_daily.py)
+SKIP_IDS: set[str] = set()
+
+
 def start(day: str) -> None:
     folder = ROOT / day
     state = load_state(folder)
@@ -182,8 +214,12 @@ def start(day: str) -> None:
     def local_day(item: dict) -> str:
         return datetime.fromisoformat(item["date"].replace("Z", "+00:00")).astimezone(TASHKENT).strftime("%Y-%m-%d")
 
+    # Под заказ, CIP и без растаможки (price_type) в платную обработку не идут: решение Ника 18.11.2026.
+    # На сайте у них остаётся первое фото поста или кадр ролика.
     todays = [item for item in listings
-              if item.get("brand") and item.get("kind") == "listing" and not item.get("is_sold") and local_day(item) == day]
+              if item.get("brand") and item.get("kind") == "listing" and not item.get("is_sold")
+              and not item.get("price_type") and not item.get("removed_at") and local_day(item) == day
+              and item["id"] not in SKIP_IDS]
     places, posts_cache = Places(), {}
     video_items, photo_items = [], []
     for item in todays:
@@ -259,6 +295,16 @@ def start(day: str) -> None:
     if video_lines:
         state["jobs"]["video"] = submit(api, folder, "video", VIDEO_MODEL, video_lines)
     save_state(folder, state)
+
+    # Описания: пересказ текста поста на русском, для всех объявлений дня с содержательным текстом
+    text_lines = [{"key": item["id"], "request": {
+        "contents": [{"role": "user", "parts": [{"text": TEXT_PROMPT + (item.get("description") or "")[:3000]}]}],
+        "generationConfig": {"responseMimeType": "application/json", "temperature": 0}}}
+        for item in todays if len((item.get("description") or "").strip()) >= TEXT_MIN_CHARS]
+    state["text"] = []
+    if text_lines:
+        state["jobs"]["text"] = submit(api, folder, "text", VIDEO_MODEL, text_lines)
+    save_state(folder, state)
     print("Отправлено. Ответ приходит в течение суток, обычно быстрее. Проверка: .venv/bin/python _batch_day.py check --wait")
 
 
@@ -300,6 +346,8 @@ def collect_video(api, folder: Path, state: dict, job) -> None:
         (out / "frames").mkdir(parents=True, exist_ok=True)
         (out / "video.json").write_text(json.dumps(answer, ensure_ascii=False, indent=1), encoding="utf-8")
         row.update({"car": answer.get("car"), "price_voice": answer.get("price_voice"), "price_overlay": answer.get("price_overlay"),
+                    "speech_ru": answer.get("speech_ru") if isinstance(answer.get("speech_ru"), str) else None,
+                    "transcript": answer.get("transcript").strip() if isinstance(answer.get("transcript"), str) and answer.get("transcript").strip() else None,
                     "year": answer.get("year"), "mileage_km": answer.get("mileage_km"), "cars_in_video": answer.get("cars_in_video")})
         frames = {}
         for slot, count in SLOTS.items():
@@ -338,6 +386,25 @@ def collect_video(api, folder: Path, state: dict, job) -> None:
         state["jobs"]["grid"] = submit(api, folder, "grid", IMAGE_MODEL, grid_lines)
 
 
+def collect_text(api, folder: Path, state: dict, job) -> None:
+    """Ответы пакета описаний: {id, description} в state["text"]. Пустые описания не сохраняем."""
+    info = state["jobs"]["text"]
+    got, dollars, rows = 0, 0.0, []
+    for key, item in results(api, job).items():
+        price, _ = cost_of(item, info["model"])
+        dollars += price
+        try:
+            text = json.loads(text_of(item)).get("description_ru")
+        except (ValueError, AttributeError):
+            continue
+        if isinstance(text, str) and text.strip():
+            rows.append({"id": key, "description": text.strip()})
+            got += 1
+    state["text"] = rows
+    info.update({"collected": True, "got": got, "cost": round(dollars, 3)})
+    print(f"Описания: получено {got} из {info['requests']}, около ${dollars:.2f}", flush=True)
+
+
 def collect_grid(api, folder: Path, state: dict, job) -> None:
     info = state["jobs"]["grid"]
     by_id = {row["id"]: row for row in state["video"]}
@@ -374,6 +441,7 @@ def report(folder: Path, state: dict) -> None:
         "video_listings": len(video), "video_parsed": jobs.get("video", {}).get("got", 0),
         "price_from_video": len(with_price), "price_new_where_post_had_none": len(new_price),
         "grids": jobs.get("grid", {}).get("got", 0),
+        "descriptions": jobs.get("text", {}).get("got", 0),
         "cost_usd": {name: info.get("cost") for name, info in jobs.items()}, "cost_total_usd": round(total, 2),
     }
     (folder / "report.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -417,20 +485,12 @@ SITE_DIR = PARSER_DIR.parent
 OVERLAY_FILE = SITE_DIR / "src" / "data" / "preview-overlay.json"
 
 
-def publish(folder: Path, state: dict) -> None:
-    """Кладёт результат пробы на второй сайт «стало» (npm run dev:new, порт 3001).
-    Обычный сайт не меняется: он этот файл не читает."""
-    import shutil
-    day = state["day"]
-    target_root = SITE_DIR / "public" / "preview" / day
+def build_entries(folder: Path, state: dict, put) -> dict:
+    """Что показать на сайте по каждому объявлению дня: {id: {kind, cover, photos, price, year, mileage, description}}.
+
+    put(listing_id, файл, имя) кладёт картинку туда, откуда её раздаёт сайт, и возвращает её адрес.
+    """
     entries = {}
-
-    def put(listing_id: str, source: Path, name: str) -> str:
-        target = target_root / listing_id / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, target)
-        return f"/preview/{day}/{listing_id}/{name}"
-
     for row in state["photo"]:
         source_dir = folder / row["id"]
         if (source_dir / "cover_ai.jpg").exists():
@@ -458,9 +518,35 @@ def publish(folder: Path, state: dict) -> None:
             value = (row.get(field) or {}).get("value") if isinstance(row.get(field), dict) else None
             if isinstance(value, (int, float)) and value >= 0:
                 entry[key] = int(value)
+        if row.get("speech_ru"):
+            entry["speech"] = row["speech_ru"]  # пересказ того, что продавец говорит в ролике
+        if row.get("transcript"):
+            entry["transcript"] = row["transcript"]  # дословно, на языке оригинала (решение Ника 19.11.2026)
         if entry:
-            entry.setdefault("kind", "crop")
             entries[row["id"]] = entry
+    # Описание из текста поста: есть и у объявлений, где с фото ничего делать не пришлось
+    for row in state.get("text") or []:
+        entries.setdefault(row["id"], {})["description"] = row["description"]
+    return entries
+
+
+def publish(folder: Path, state: dict) -> None:
+    """Кладёт результат пробы на второй сайт «стало» (npm run dev:new, порт 3001).
+    Обычный сайт не меняется: он этот файл не читает."""
+    import shutil
+    day = state["day"]
+    target_root = SITE_DIR / "public" / "preview" / day
+
+    def put(listing_id: str, source: Path, name: str) -> str:
+        target = target_root / listing_id / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        return f"/preview/{day}/{listing_id}/{name}"
+
+    entries = build_entries(folder, state, put)
+    for entry in entries.values():
+        if "cover" not in entry and ("price" in entry or "year" in entry or "mileage" in entry):
+            entry.setdefault("kind", "crop")  # как раньше: у записи только с ценой из видео был вид crop
     OVERLAY_FILE.write_text(json.dumps({"day": day, "listings": entries}, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     print(f"На сайт «стало» выложено объявлений: {len(entries)}. Запуск второго сайта: npm run dev:new, "
           f"потом http://localhost:3001/cars?day={day}&hideSold=1 (было: http://localhost:3000/cars?day={day}&hideSold=1)")
@@ -473,10 +559,10 @@ def check(wait: bool) -> None:
     folder = ROOT / days[-1]
     state = load_state(folder)
     api = client()
-    collectors = {"outpaint": collect_outpaint, "video": collect_video, "grid": collect_grid}
+    collectors = {"outpaint": collect_outpaint, "video": collect_video, "text": collect_text, "grid": collect_grid}
     while True:
         pending = []
-        for name in ("outpaint", "video", "grid"):
+        for name in ("outpaint", "video", "text", "grid"):
             info = state["jobs"].get(name)
             if not info or info.get("collected"):
                 continue

@@ -31,5 +31,9 @@ export PYTHONUNBUFFERED=1
     "$PYTHON" export_to_site.py | grep -E "^Выгружено"
     # Свежие фото сразу уезжают на Google Диск, на Маке остаются ссылки
     "$PYTHON" archive.py | grep -E "перенесено|не принимает|пропущен|не настроен"
+    # Карточки: забрать ответы очереди Google, которые не успели прийти в ежедневном прогоне
+    if [ -f data/cards.on ] && grep -qs '"collected": false' data/_cards/*/state.json; then
+        "$PYTHON" cards_daily.py collect | grep -E "^Карточки|^Сайт|Диск не принял"
+    fi
     echo "===== $(date '+%H:%M') конец"
 } 2>&1 | tee -a "$LOG"

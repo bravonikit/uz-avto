@@ -63,4 +63,7 @@ next-env.d.ts
 
 # сравнение «было и стало»: картинки пробы нового конвейера и сборка второго сайта
 /public/preview/
+# обработанные карточки (parser/cards_daily.py): картинки и то, что подставляется на сайт
+/public/cards/
+/src/data/cards-overlay.json
 /.next-preview/

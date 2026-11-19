@@ -12,6 +12,7 @@ def names(pair):
 class PriceTypeTest(unittest.TestCase):
     def test_types(self):
         self.assertEqual(find_price_type("CIP tashkent 19.400 💵"), "cip")
+        self.assertEqual(find_price_type("нархи 29.000 Растаможка олохида -+ $8500"), "no_customs")  # aslauto, узбекский кириллицей
         self.assertEqual(find_price_type("💰 142 000 $ — без растаможки"), "no_customs")
         self.assertEqual(find_price_type("(Растаможка: примерно $7100)"), "no_customs")
         self.assertEqual(find_price_type("ПРЕДЗАКАЗ НА НОВУЮ МОДЕЛЬ"), "order")

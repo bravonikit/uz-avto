@@ -57,6 +57,12 @@ if [ -t 1 ]; then HOW="вручную"; else HOW="авто"; fi
     echo
     # Резервная копия данных и переезд всех фото на Google Диск (на Маке остаются ссылки). Диск не подключён: шаг пропускается
     "$PYTHON" archive.py
+    # Обработка карточек за вчера: обложки, фото из видео, описания. Платные шаги идут в очередь Google.
+    # Включается файлом data/cards.on (touch data/cards.on), выключается его удалением.
+    if [ -f data/cards.on ]; then
+        echo
+        caffeinate -i "$PYTHON" cards_daily.py run --wait 45
+    fi
     echo "===== $(date '+%d.%m.%Y %H:%M') конец ====="
     echo
 } 2>&1 | tee -a "$LOG"

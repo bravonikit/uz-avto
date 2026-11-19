@@ -18,7 +18,7 @@ from llm_parse import LLM_PARSED_FILE, load_accounts_from_file, load_parsed
 # Тип цены. Порядок важен: первое совпавшее правило побеждает.
 PRICE_TYPES = [
     # цена без растаможки: растаможку покупатель платит сам
-    ("no_customs", r"без\s+растамож|растаможк\w*\s*(?::|примерно|ориентировочно|отдельно)|rastamojka\w*\s*(?:siz|alohida)|bojsiz|rastamojkasiz"),
+    ("no_customs", r"без\s+растамож|растаможк\w*\s*(?::|примерно|ориентировочно|отдельно|[ао]лохида)|растаможкасиз|божсиз|rastamojka\w*\s*(?:siz|alohida)|bojsiz|rastamojkasiz"),
     # цена с доставкой до Ташкента, машина ещё не здесь
     ("cip", r"\bcip\b|\bсип\b"),
     # под заказ: машины нет в наличии

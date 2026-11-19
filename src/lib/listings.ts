@@ -5,6 +5,7 @@
 import instagramPosts from "@/data/instagram-listings.json";
 import channelPhotoQuality from "@/data/channel-photo-quality.json";
 import previewOverlay from "@/data/preview-overlay.json";
+import cardsOverlay from "@/data/cards-overlay.json";
 import type { BODY_TYPES, DRIVES, FUEL_TYPES, TRANSMISSIONS } from "./catalog";
 import { parseNumber } from "./format";
 
@@ -87,6 +88,9 @@ export type Listing = {
   photos?: string[]; // все фото карточки по порядку, первое это обложка (пока только в режиме «стало»)
   // Режим «стало»: что в этой карточке сделал новый конвейер (parser/_batch_day.py)
   preview?: { kind: "crop" | "outpaint" | "generated"; priceSource?: "voice" | "overlay"; priceApprox?: boolean };
+  summary?: string; // короткое описание на русском: пересказ текста поста (parser/cards_daily.py)
+  speech?: string; // пересказ того, что продавец говорит в ролике
+  transcript?: string; // всё, что сказано в ролике, дословно, на языке оригинала
   photoQuality: PhotoQuality; // качество фото канала, от него зависят пометка и место в выдаче
   isSold?: boolean; // продавец пометил пост как проданный ("BARAKA BOLDI", "ПРОДАНО")
   soldAt?: string; // когда продана: известно, только если «продано» пришло отдельным постом
@@ -153,11 +157,20 @@ type PreviewEntry = {
   priceApprox?: boolean;
   year?: number;
   mileage?: number;
+  description?: string;
+  speech?: string;
+  transcript?: string;
 };
 const PREVIEW_LISTINGS = (IS_PREVIEW ? (previewOverlay as { listings: unknown }).listings : {}) as Record<string, PreviewEntry>;
+// Постоянная обработка карточек (parser/cards_daily.py): обложки, фото из видео, цена и пробег из ролика, описания.
+// Подставляется всегда, на обоих сайтах. Проба «стало» идёт поверх неё.
+const CARD_LISTINGS = (cardsOverlay as { listings: unknown }).listings as Record<string, PreviewEntry>;
 
 function applyPreview(listing: Listing): Listing {
-  const entry = PREVIEW_LISTINGS[listing.id];
+  return applyEntry(applyEntry(listing, CARD_LISTINGS[listing.id]), PREVIEW_LISTINGS[listing.id]);
+}
+
+function applyEntry(listing: Listing, entry: PreviewEntry | undefined): Listing {
   if (!entry) return listing;
   const takesPrice = listing.price === undefined && entry.price !== undefined;
   return {
@@ -168,9 +181,12 @@ function applyPreview(listing: Listing): Listing {
     year: listing.year ?? entry.year,
     mileage: listing.mileage ?? entry.mileage,
     photoQuality: entry.cover ? "good" : listing.photoQuality,
+    summary: entry.description ?? listing.summary,
+    speech: entry.speech ?? listing.speech,
+    transcript: entry.transcript ?? listing.transcript,
     preview: entry.kind
       ? { kind: entry.kind, priceSource: takesPrice ? entry.priceSource : undefined, priceApprox: takesPrice ? entry.priceApprox : undefined }
-      : undefined,
+      : listing.preview,
   };
 }
 
@@ -231,6 +247,7 @@ export type ListingFilters = {
   seller?: string; // Instagram-аккаунт продавца: /cars?seller=moshinasale
   hideSold?: boolean; // не показывать проданные
   day?: string; // только объявления за один день по Ташкенту: /cars?day=2026-11-16
+  processed?: boolean; // только обработанные карточки (обложка, фото из видео или описание): /cars?processed=1
   sort?: "new" | "cheap" | "expensive";
 };
 
@@ -254,6 +271,7 @@ export function filtersFromSearchParams(
     seller: text("seller"),
     hideSold: text("hideSold") === "1",
     day: /^\d{4}-\d{2}-\d{2}$/.test(text("day") ?? "") ? text("day") : undefined,
+    processed: text("processed") === "1",
     sort: sort === "cheap" || sort === "expensive" ? sort : "new",
   };
 }
@@ -278,6 +296,7 @@ export function searchListings(filters: ListingFilters = {}, extra: Listing[] = 
       (!filters.seller || car.source?.account === filters.seller) &&
       (!filters.hideSold || !car.isSold) &&
       (!filters.day || tashkentDay(car.createdAt) === filters.day) &&
+      (!filters.processed || Boolean(car.preview?.kind)) &&
       (filters.priceFrom === undefined || priceAtLeast(car, filters.priceFrom)) &&
       (filters.priceTo === undefined || priceAtMost(car, filters.priceTo)) &&
       (filters.yearFrom === undefined || (car.year !== undefined && car.year >= filters.yearFrom)) &&
@@ -287,10 +306,12 @@ export function searchListings(filters: ListingFilters = {}, extra: Listing[] = 
   return found.sort((a, b) => {
     // Проданные всегда в конце списка, при любой сортировке
     if (Boolean(a.isSold) !== Boolean(b.isSold)) return a.isSold ? 1 : -1;
-    // В ленте «сначала новые» объявления с хорошими фото идут выше остальных (но все они выше проданных).
+    // В ленте «сначала новые»: выше всех объявления, обработанные через видео (4 фото из ролика и текст),
+    // потом с хорошими фото, потом остальные (но все они выше проданных). Решение Ника 19.11.2026.
     // При сортировке по цене порядок задаёт только цена.
     if (filters.sort !== "cheap" && filters.sort !== "expensive" && !a.isSold) {
-      const tier = (car: Listing) => (car.photoQuality === "good" ? 0 : 1);
+      const tier = (car: Listing) =>
+        car.preview?.kind === "generated" && (car.summary || car.speech) ? 0 : car.photoQuality === "good" ? 1 : 2;
       if (tier(a) !== tier(b)) return tier(a) - tier(b);
     }
     // При сортировке по цене объявления без цены идут в конце
