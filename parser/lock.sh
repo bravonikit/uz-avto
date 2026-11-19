@@ -12,6 +12,8 @@ need_space() {
         text="Прогон остановлен: на диске свободно ${free_gb} ГБ, нужно не меньше ${need_gb} ГБ. Освободите место и запустите снова"
         echo "$(date '+%d.%m.%Y %H:%M') $text" | tee -a "$LOG"
         osascript -e "display notification \"$text\" with title \"uz-avto: мало места\"" 2>/dev/null || true
+        # И в Telegram бот, не чаще раза в 6 часов (часовой прогон иначе писал бы каждый час)
+        ./.venv/bin/python tg_bot.py alert "$text" --key space >/dev/null 2>&1 || true
         return 1
     fi
 }

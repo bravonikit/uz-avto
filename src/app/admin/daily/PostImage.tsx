@@ -5,6 +5,7 @@
 // Оформление повторяет макеты от 16.11.2026 (parser/data/_scratch/tg_post_2026-11-16).
 
 import { useEffect, useRef, useState } from "react";
+import { publishPostAction } from "../actions";
 
 export type PostImageItem = {
   title: string;
@@ -24,6 +25,9 @@ type Props = {
   date: string;
   items: PostImageItem[];
   fileName: string;
+  caption?: string; // подпись к посту в канале
+  channel?: string; // "@uzavto_daily"; нет: бот не настроен, кнопки публикации нет
+  published?: { url?: string; at: string }; // этот пост уже уходил в канал
 };
 
 const WIDTH = 1080;
@@ -225,7 +229,10 @@ async function draw(canvas: HTMLCanvasElement, { layout, kicker, title, footer, 
 export function PostImage(props: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [message, setMessage] = useState("");
-  const { layout, kicker, title, footer, date, items, fileName } = props;
+  const { layout, kicker, title, footer, date, items, fileName, caption, channel, published } = props;
+  const [confirming, setConfirming] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sentUrl, setSentUrl] = useState<string | undefined>(published?.url);
 
   useEffect(() => {
     if (canvasRef.current) void draw(canvasRef.current, { layout, kicker, title, footer, date, items, fileName });
@@ -256,6 +263,32 @@ export function PostImage(props: Props) {
     setTimeout(() => setMessage(""), 2500);
   };
 
+  // В канал уходит JPEG: в несколько раз легче PNG, Telegram всё равно пережимает картинку
+  const publish = async () => {
+    setConfirming(false);
+    setSending(true);
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvasRef.current ? canvasRef.current.toBlob(resolve, "image/jpeg", 0.92) : resolve(null),
+    );
+    if (!blob || caption === undefined) {
+      setSending(false);
+      return;
+    }
+    const form = new FormData();
+    form.append("key", fileName.replace(/\.png$/, ""));
+    form.append("photo", blob, fileName.replace(/\.png$/, ".jpg"));
+    form.append("caption", caption);
+    const result = await publishPostAction(form);
+    setSending(false);
+    if (result.error) setMessage(`Не опубликовано: ${result.error}`);
+    else {
+      setSentUrl(result.url);
+      setMessage("Опубликовано");
+    }
+  };
+
+  const wasSent = Boolean(published) || Boolean(sentUrl);
+
   return (
     <div>
       <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} className="w-full max-w-md rounded-2xl ring-1 ring-slate-200" />
@@ -266,8 +299,45 @@ export function PostImage(props: Props) {
         <button type="button" onClick={copy} className="rounded-xl px-4 py-2 font-medium text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50">
           Скопировать
         </button>
+        {channel && caption !== undefined && !confirming && (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            disabled={sending}
+            className="rounded-xl bg-brand-600 px-4 py-2 font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+          >
+            {sending ? "Публикую…" : wasSent ? "Опубликовать ещё раз" : "Опубликовать в канал"}
+          </button>
+        )}
+        {confirming && (
+          <span className="flex items-center gap-2">
+            <span className="text-slate-600">Выложить в {channel}{wasSent ? " повторно" : ""}?</span>
+            <button type="button" onClick={publish} className="rounded-xl bg-brand-600 px-3 py-2 font-semibold text-white hover:bg-brand-700">
+              Да
+            </button>
+            <button type="button" onClick={() => setConfirming(false)} className="rounded-xl px-3 py-2 text-slate-600 ring-1 ring-slate-300">
+              Нет
+            </button>
+          </span>
+        )}
         {message && <span className="text-slate-500">{message}</span>}
       </div>
+      {wasSent && (
+        <p className="mt-2 text-xs text-emerald-700">
+          Уже в канале{published && !sentUrl ? ` с ${new Date(published.at).toLocaleString("ru-RU")}` : ""}
+          {(sentUrl ?? published?.url)?.startsWith("http") && (
+            <>
+              :{" "}
+              <a href={sentUrl ?? published?.url} target="_blank" rel="noreferrer" className="underline">
+                открыть пост
+              </a>
+            </>
+          )}
+        </p>
+      )}
+      {!channel && (
+        <p className="mt-2 text-xs text-slate-400">Кнопки «в канал» нет: бот не настроен (TG_BOT_TOKEN и TG_CHANNEL, python parser/tg_bot.py setup)</p>
+      )}
     </div>
   );
 }

@@ -6,6 +6,7 @@ import { isAdmin, signInAdmin, signOutAdmin } from "@/lib/admin";
 import { parseNumber } from "@/lib/format";
 import { decidePair, decidePrice, getPriceQueue } from "@/lib/review";
 import { setSellerListingStatus } from "@/lib/seller-listings";
+import { publishToChannel } from "@/lib/telegram";
 
 export type LoginState = { error?: string };
 
@@ -62,4 +63,29 @@ export async function decidePriceAction(formData: FormData) {
     if (price && price >= 500 && price <= 5_000_000) await decidePrice(id, price);
   }
   refresh();
+}
+
+export type PublishState = { error?: string; url?: string };
+
+// Пост «Аналитики дня» в открытый Telegram канал: картинка с холста в админке и подпись к ней
+export async function publishPostAction(formData: FormData): Promise<PublishState> {
+  if (!(await isAdmin())) return { error: "Нужен вход в админку" };
+  const key = formData.get("key");
+  const photo = formData.get("photo");
+  const caption = formData.get("caption");
+  if (typeof key !== "string" || !(photo instanceof Blob) || typeof caption !== "string") return { error: "Пустой пост" };
+  // Пока у сайта нет домена, ссылки в подписи ведут на заглушку: такие строки в канал не отправляем
+  const clean = caption
+    .split("\n")
+    .filter((line) => !line.includes("АДРЕС-САЙТА"))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  try {
+    const post = await publishToChannel(key, photo, clean);
+    refresh();
+    return { url: post.url ?? post.channel };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
 }

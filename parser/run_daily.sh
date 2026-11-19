@@ -72,3 +72,5 @@ SUMMARY="$(grep -E 'Готово:|Прогон остановлен' "$LOG" | ta
 [ -z "$SUMMARY" ] && SUMMARY="прогон не дошёл до конца, смотрите $LOG"
 echo "$STARTED - $(date '+%H:%M') | $HOW | $SUMMARY" >> data/logs/history.txt
 osascript -e "display notification \"$SUMMARY\" with title \"uz-avto: парсер ($HOW)\"" 2>/dev/null || true
+# Итог прогона в Telegram бот (python tg_bot.py setup). Бот не настроен: шаг молча пропускается
+"$PYTHON" tg_bot.py report "$LOG" --how "$HOW" --started "$STARTED" >> "$LOG" 2>&1 || true

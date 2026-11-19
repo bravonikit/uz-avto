@@ -14,6 +14,7 @@ import { isAdmin } from "@/lib/admin";
 import { formatDate, formatMileage, formatPrice } from "@/lib/format";
 import { DAILY_THEMES, getThemePick, themeIndexForDay, type ThemePick } from "@/lib/daily-themes";
 import { getDailyDigest, getListingDays, listingTitle, marketDiscount, type DailyDigest, type Listing } from "@/lib/listings";
+import { publishedPosts, telegramChannel, type PublishedPost } from "@/lib/telegram";
 import { CopyText } from "./CopyText";
 import { PostImage, type PostImageItem } from "./PostImage";
 
@@ -132,6 +133,8 @@ async function Daily({ searchParams }: Props) {
   const asked = typeof params.theme === "string" ? Number(params.theme) : NaN;
   const themeIndex = Number.isInteger(asked) && asked >= 0 && asked < DAILY_THEMES.length ? asked : todaysTheme;
   const pick = getThemePick(themeIndex, day);
+  const channel = telegramChannel();
+  const sent = await publishedPosts();
   const stats: [string, string][] = [
     ["Объявлений за день", String(digest.total)],
     ["В наличии", String(digest.inStock)],
@@ -194,6 +197,8 @@ async function Daily({ searchParams }: Props) {
           listings={digest.deals}
           text={caption("💸 Ниже рынка", digest, digest.deals, true)}
           empty="За этот день нет машин ниже рынка с надёжной оценкой."
+          channel={channel}
+          sent={sent}
         />
         <Post
           layout="tiles"
@@ -205,6 +210,8 @@ async function Daily({ searchParams }: Props) {
           listings={digest.best}
           text={caption("💎 Самые красивые", digest, digest.best, false)}
           empty="За этот день нет машин с ценой и фото."
+          channel={channel}
+          sent={sent}
         />
         <Post
           layout="tiles"
@@ -216,6 +223,8 @@ async function Daily({ searchParams }: Props) {
           listings={pick.listings}
           text={themeCaption(pick, digest)}
           empty={`По теме «${pick.theme.title}» машин в продаже за 90 дней не нашлось.`}
+          channel={channel}
+          sent={sent}
         >
           {pick.stats.fastSold.length > 0 && (
             <div className="mb-4 rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
@@ -266,9 +275,11 @@ type PostProps = {
   text: string;
   empty: string;
   children?: React.ReactNode; // доп. блок под заголовком: переключатель тем
+  channel?: string; // канал бота; нет: публикация в канал выключена
+  sent: Record<string, PublishedPost>; // что уже уходило в канал
 };
 
-function Post({ layout, image, fileName, day, title, note, listings, text, empty, children }: PostProps) {
+function Post({ layout, image, fileName, day, title, note, listings, text, empty, children, channel, sent }: PostProps) {
   return (
     <section>
       <h3 className="text-lg font-bold">{title}</h3>
@@ -286,6 +297,9 @@ function Post({ layout, image, fileName, day, title, note, listings, text, empty
             date={formatDate(day)}
             items={listings.map((listing) => imageItem(listing, layout === "list"))}
             fileName={fileName}
+            caption={text}
+            channel={channel}
+            published={sent[fileName.replace(/\.png$/, "")]}
           />
           <div className="min-w-0">
             <p className="mb-2 text-xs font-semibold tracking-wide text-slate-400 uppercase">Машины на картинке</p>
