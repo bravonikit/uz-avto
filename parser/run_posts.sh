@@ -17,6 +17,8 @@ if [ -s "$HOME/.nvm/nvm.sh" ]; then source "$HOME/.nvm/nvm.sh" >/dev/null 2>&1; 
 export PYTHONUNBUFFERED=1
 {
     echo "===== $(date '+%d.%m.%Y %H:%M') посты: старт ====="
+    # Последний запуск дня (с 19:00) догоняет всё, что не вышло утром и днём (Мак спал, сеть, ошибка)
+    if [ "$(date +%H)" -ge 19 ] && [ $# -eq 0 ]; then set -- --all; fi
     caffeinate -i "$PARSER_DIR/.venv/bin/python" post_daily.py "$@"
     echo "===== $(date '+%d.%m.%Y %H:%M') посты: конец ====="
 } 2>&1 | tee -a "$LOG"

@@ -12,7 +12,7 @@ HOUR=12
 MINUTE=37
 VIDEO_EVERY_MIN=120
 HOURLY_MINUTE=7
-POST_TIMES="10:05 14:05 19:05"  # три поста в день: ниже рынка, самые красивые, подборка
+POST_TIMES="10:05 14:05 19:05 21:35"  # три поста в день (ниже рынка, самые красивые, подборка) и страховочный запуск
 
 LABEL="com.bravonikit.uzavto.parser"
 VIDEO_LABEL="com.bravonikit.uzavto.video"
@@ -108,6 +108,8 @@ cat > "$HOURLY_PLIST" <<PLIST
 </plist>
 PLIST
 
+# launchd запускает с коротким PATH и не видит Node.js: запоминаем, где он у вас сейчас
+NODE_DIR="$(dirname "$(command -v node 2>/dev/null || echo /opt/homebrew/bin/node)")"
 POST_INTERVALS=""
 for t in $POST_TIMES; do
     POST_INTERVALS="$POST_INTERVALS        <dict><key>Hour</key><integer>$((10#${t%%:*}))</integer><key>Minute</key><integer>$((10#${t##*:}))</integer></dict>
@@ -125,6 +127,11 @@ cat > "$POSTS_PLIST" <<PLIST
         <string>/bin/bash</string>
         <string>$PARSER_DIR/run_posts.sh</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>$NODE_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
     <key>StartCalendarInterval</key>
     <array>
 $POST_INTERVALS    </array>
