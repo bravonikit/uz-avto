@@ -20,6 +20,9 @@ if pgrep -f "tg_video.py|video_frames.py" >/dev/null; then
     exit 0
 fi
 
+# Ролики пишутся на Google Диск, но сначала ложатся на диск Мака и ждут выгрузки: нужен запас
+need_space 8 || exit 0
+
 PYTHON="$PARSER_DIR/.venv/bin/python"
 export PYTHONUNBUFFERED=1
 {

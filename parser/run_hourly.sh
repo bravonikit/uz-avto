@@ -17,6 +17,8 @@ if ! take_lock daily; then
     exit 0
 fi
 
+need_space 3 || exit 0  # мало места: часовой прогон пропускаем
+
 PYTHON="$PARSER_DIR/.venv/bin/python"
 export PYTHONUNBUFFERED=1
 {
@@ -27,5 +29,7 @@ export PYTHONUNBUFFERED=1
         caffeinate -i "$PYTHON" tg_video.py --only download --light-only --days 2 | grep "^Видео"
     fi
     "$PYTHON" export_to_site.py | grep -E "^Выгружено"
+    # Свежие фото сразу уезжают на Google Диск, на Маке остаются ссылки
+    "$PYTHON" archive.py | grep -E "перенесено|не принимает|пропущен|не настроен"
     echo "===== $(date '+%H:%M') конец"
 } 2>&1 | tee -a "$LOG"

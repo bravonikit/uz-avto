@@ -27,6 +27,7 @@ import json
 import os
 import random
 import re
+import shutil
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -62,6 +63,7 @@ QUICK_DAYS = 1
 QUICK_MARGIN_HOURS = 2
 QUICK_MAX_PAGES = 40
 PAGE_DELAY = (2, 4)  # пауза между запросами, секунд
+MIN_FREE_GB = 2  # свободного места на диске меньше этого: дальше каналы не качаем
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"}
 
 
@@ -474,6 +476,11 @@ def main() -> None:
     state = load_json(STATE_FILE, {})
     totals = {"new": 0, "changed": 0, "removed": 0}
     for number, (channel, instagram) in enumerate(channels):
+        free_gb = shutil.disk_usage(PARSER_DIR).free / 1e9
+        if free_gb < MIN_FREE_GB:
+            print(f"Прогон остановлен: на диске свободно {free_gb:.1f} ГБ, меньше {MIN_FREE_GB} ГБ. "
+                  f"Пройдено каналов {number} из {len(channels)}, остальные в следующий запуск")
+            break
         channel_dir = TG_DIR / channel
         posts_file = channel_dir / "posts.json"
         known = load_json(posts_file, {})

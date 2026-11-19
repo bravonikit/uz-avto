@@ -19,6 +19,12 @@ if ! take_lock daily; then
     exit 0
 fi
 
+# Меньше 5 ГБ свободно: не начинаем, иначе прогон упадёт посередине
+if ! need_space 5; then
+    echo "$(date '+%d.%m.%Y %H:%M') | мало места | Прогон остановлен: на диске меньше 5 ГБ" >> data/logs/history.txt
+    exit 0
+fi
+
 PYTHON="$PARSER_DIR/.venv/bin/python"
 # Без этого Python копит вывод и лог заполняется только в конце прогона
 export PYTHONUNBUFFERED=1
@@ -49,7 +55,7 @@ if [ -t 1 ]; then HOW="вручную"; else HOW="авто"; fi
     echo
     "$PYTHON" status.py
     echo
-    # Резервная копия данных и переезд старых фото на Google Диск. Диск не подключён: шаг пропускается
+    # Резервная копия данных и переезд всех фото на Google Диск (на Маке остаются ссылки). Диск не подключён: шаг пропускается
     "$PYTHON" archive.py
     echo "===== $(date '+%d.%m.%Y %H:%M') конец ====="
     echo

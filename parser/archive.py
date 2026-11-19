@@ -6,9 +6,12 @@
 Что делает за один запуск:
   1. Резервная копия: все небольшие файлы данных (json, csv, txt) копируются в <архив>/backup/.
      Фото можно скачать заново, а историю правок и удалений постов нельзя.
-  2. Переезд фото: картинки постов Telegram старше ARCHIVE_AFTER_DAYS дней переносятся
-     в <архив>/data/..., а на их месте остаётся ссылка (symlink) на файл в архиве.
+  2. Переезд фото: картинки постов Telegram переносятся в папку поста на Диске
+     (<архив>/cards/<канал>/<день>_<id>/photo_NN.jpg, см. card_paths.py), а на их месте остаётся
+     ссылка (symlink) на файл в архиве. С 19.11.2026 переносятся все фото сразу, а не только старые:
+     на Маке остаются ссылки и рабочие файлы парсера, место на диске Мака проект больше не занимает.
      Остальные скрипты ничего не замечают: открывают фото по старому пути, Диск сам его подтянет.
+     Если Диск не принял файл (нет сети, занят), оригинал остаётся на Маке и уедет в следующий запуск.
 
 Обложки, которые уже стоят на сайте (public/tg), остаются на Маке: это жёсткие ссылки на те же данные.
 
@@ -18,6 +21,8 @@
 Запуск:
   python archive.py --dry-run   только показать, что было бы сделано
   python archive.py             сделать
+  python archive.py --days 14   переносить только фото постов старше 14 дней (как было до 19.11.2026)
+  python archive.py --limit 500 не больше 500 фото за запуск
 """
 
 import argparse
@@ -30,8 +35,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from accounts import DATA_DIR, PARSER_DIR
+from card_paths import CardIndex, write_text
 
-ARCHIVE_AFTER_DAYS = 14  # сколько дней фото поста живут на Маке (это же окно ежедневного обхода)
+ARCHIVE_AFTER_DAYS = 0  # сколько дней фото поста живут на Маке. 0: уезжают на Диск сразу (до 19.11.2026 было 14)
+MAX_FAILS_IN_ROW = 50  # столько отказов Диска подряд: дальше не пробуем, остальное уедет в следующий запуск
 BACKUP_SUFFIXES = {".json", ".csv", ".txt"}
 BACKUP_SKIP_DIRS = {"_scratch", "logs", "images"}  # черновики, логи и сами картинки в копию не идут
 
@@ -79,7 +86,7 @@ def backup_data(data_dir: Path, archive_dir: Path, dry_run: bool) -> int:
 
 
 def old_post_images(data_dir: Path, parser_dir: Path, days: int) -> list[Path]:
-    """Картинки постов Telegram, которые старше days дней и ещё лежат на Маке (не ссылкой)."""
+    """Картинки постов Telegram, которые старше days дней (при 0 все) и ещё лежат на Маке (не ссылкой)."""
     border = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     found = []
     for posts_file in sorted((data_dir / "_tg").glob("*/posts.json")):
@@ -94,9 +101,19 @@ def old_post_images(data_dir: Path, parser_dir: Path, days: int) -> list[Path]:
     return found
 
 
-def move_to_archive(path: Path, parser_dir: Path, archive_dir: Path) -> bool:
-    """Переносит файл в архив и оставляет на его месте ссылку. False, если копия не сошлась."""
-    target = archive_dir / path.relative_to(parser_dir)
+def move_to_archive(path: Path, parser_dir: Path, archive_dir: Path, cards: CardIndex | None = None) -> bool:
+    """Переносит файл в архив и оставляет на его месте ссылку. False, если копия не сошлась.
+
+    Фото поста ложится в папку поста (card_paths.py): <архив>/cards/<канал>/<день>_<id>/photo_NN.jpg,
+    рядом кладётся текст поста. Файл с другим именем едет по старому: в <архив>/ с тем же путём.
+    """
+    relative = path.relative_to(parser_dir)
+    target = cards.photo_target(archive_dir, relative.as_posix()) if cards else None
+    if target is None:
+        target = archive_dir / relative
+    else:
+        channel, post_id = relative.parts[2], path.name.split("_")[0]
+        write_text(target.parent, cards.text(channel, post_id))
     target.parent.mkdir(parents=True, exist_ok=True)
     if not (target.exists() and target.stat().st_size == path.stat().st_size):
         shutil.copy2(path, target)
@@ -115,7 +132,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Резервная копия и архив фото на Google Диске")
     parser.add_argument("--dry-run", action="store_true", help="только показать, ничего не менять")
     parser.add_argument("--days", type=int, default=ARCHIVE_AFTER_DAYS, help="фото старше скольких дней переносить")
-    parser.add_argument("--limit", type=int, default=3000, help="не больше стольких фото за запуск")
+    parser.add_argument("--limit", type=int, default=0, help="не больше стольких фото за запуск, 0: без ограничения")
     args = parser.parse_args()
 
     archive_dir = archive_dir_from_env()
@@ -129,22 +146,30 @@ def main() -> None:
 
     images = old_post_images(DATA_DIR, PARSER_DIR, args.days)
     size_mb = sum(path.stat().st_size for path in images) / 1e6
-    batch = images[: args.limit]
-    print(f"  фото старше {args.days} дней на Маке: {len(images)} ({size_mb:.0f} МБ), за этот запуск: {len(batch)}")
+    batch = images[: args.limit] if args.limit else images
+    which = f"старше {args.days} дней" if args.days else "постов"
+    print(f"  фото {which} на Маке: {len(images)} ({size_mb:.0f} МБ), за этот запуск: {len(batch)}")
     if args.dry_run:
         return
-    moved = failed = 0
+    moved = failed = fails_in_row = 0
+    cards = CardIndex(DATA_DIR / "_tg")
     for path in batch:
         try:
-            if move_to_archive(path, PARSER_DIR, archive_dir):
-                moved += 1
-            else:
-                failed += 1
+            ok = move_to_archive(path, PARSER_DIR, archive_dir, cards)
         except OSError as error:
-            failed += 1
-            if failed <= 3:
+            ok = False
+            if failed < 3:
                 print(f"  не удалось перенести {path.name}: {error}")
-    print(f"  перенесено в архив: {moved}, не удалось: {failed}")
+        if ok:
+            moved += 1
+            fails_in_row = 0
+            continue
+        failed += 1
+        fails_in_row += 1
+        if fails_in_row >= MAX_FAILS_IN_ROW:
+            print(f"  Диск не принимает файлы ({MAX_FAILS_IN_ROW} отказов подряд): остановка, остальное в следующий запуск")
+            break
+    print(f"  перенесено в архив: {moved}, не удалось: {failed}, осталось на Маке: {len(images) - moved}")
 
 
 if __name__ == "__main__":

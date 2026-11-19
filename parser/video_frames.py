@@ -275,9 +275,7 @@ def main() -> None:
     else:
         channels = [args.channel] if args.channel else sorted(p.name for p in TG_DIR.iterdir() if (p / "posts.json").exists())
         for channel in channels:
-            folder = places.raw(channel, 0).parent
-            if folder.exists():
-                jobs += [(channel, p.stem) for p in sorted(folder.glob("*.mp4"), reverse=True)]
+            jobs += [(channel, post_id) for post_id, _ in places.videos(channel)]
         if not args.redo:
             # Уже разобранные пропускаем, иначе каждый запуск крутил бы одни и те же первые ролики
             total = len(jobs)
@@ -295,7 +293,7 @@ def main() -> None:
         except Exception as error:  # noqa: BLE001
             status = f"ошибка {type(error).__name__}: {str(error)[:150]}"
         print(f"  {channel} {post}: {status}")
-    print(f"Готово. Листы кадров: {places.cut_root or TG_DIR}/<канал>/tg-<канал>-<id>/picks/sheet.jpg")
+    print("Готово. Листы кадров: <архив>/cards/<канал>/<день>_<id>/frames/picks/sheet.jpg")
 
 
 if __name__ == "__main__":

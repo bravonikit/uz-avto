@@ -259,6 +259,9 @@ def merge_account_duplicates(listings: list[dict]) -> tuple[list[dict], int]:
         removed += 1
         main["duplicate_ids"].append(item["id"])
         main["is_sold"] = main["is_sold"] or item["is_sold"]
+        for key in ("sold_at", "days_to_sell"):  # срок продажи мог остаться у дубля
+            if main.get(key) is None:
+                main[key] = item.get(key)
         for key in ("price", "currency", "down_payment", "year", "mileage_km", "image"):
             if main[key] is None:
                 main[key] = item[key]
@@ -295,6 +298,9 @@ def telegram_listings() -> list[dict]:
             "description", "is_sold", "source_url", "source_account", "date", *EXTRA_FIELDS, "duplicate_ids", "price_history",
         )}
         listing["first_posted"] = item.get("first_posted") or item["date"]
+        # Когда и за сколько дней продана: известно, только если продавец написал «продано» отдельным постом (tg_sold.py)
+        listing["sold_at"] = item.get("sold_at")
+        listing["days_to_sell"] = item.get("days_to_sell")
         listing["image"] = image
         listing["source"] = "telegram"
         listing["also_at"] = []
@@ -453,6 +459,9 @@ def merge_across_sellers(listings: list[dict]) -> tuple[list[dict], int, list[di
                 }]
                 main["is_sold"] = main["is_sold"] or other["is_sold"]
                 main["first_posted"] = min(main["first_posted"], other["first_posted"])
+                for key in ("sold_at", "days_to_sell"):
+                    if main.get(key) is None:
+                        main[key] = other.get(key)
                 for key in ("price", "currency", "down_payment", "image"):
                     if main[key] is None:
                         main[key] = other[key]
@@ -602,7 +611,7 @@ def main() -> None:
     # Свежие первыми. Дубли убираем до проверки цен
     listings, duplicates = merge_account_duplicates(listings)
     for item in listings:
-        item.update(source="instagram", also_at=[], price_history=[])
+        item.update(source="instagram", also_at=[], price_history=[], sold_at=None, days_to_sell=None)
     instagram_count = len(listings)
     telegram = telegram_listings()
     listings, cross_duplicates = merge_across_sources(listings, telegram)

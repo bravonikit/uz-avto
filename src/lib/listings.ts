@@ -89,6 +89,8 @@ export type Listing = {
   preview?: { kind: "crop" | "outpaint" | "generated"; priceSource?: "voice" | "overlay"; priceApprox?: boolean };
   photoQuality: PhotoQuality; // качество фото канала, от него зависят пометка и место в выдаче
   isSold?: boolean; // продавец пометил пост как проданный ("BARAKA BOLDI", "ПРОДАНО")
+  soldAt?: string; // когда продана: известно, только если «продано» пришло отдельным постом
+  daysToSell?: number; // за сколько дней продана, от первой публикации
   createdAt: string;
 };
 
@@ -130,6 +132,9 @@ const INSTAGRAM_LISTINGS: Listing[] = instagramPosts.map((post) => ({
   },
   photoQuality: photoQualityOf(post.source, post.source_account),
   isSold: post.is_sold,
+  // Этих полей нет в старых выгрузках и у Instagram, поэтому читаем их как необязательные
+  soldAt: (post as { sold_at?: string | null }).sold_at ?? undefined,
+  daysToSell: (post as { days_to_sell?: number | null }).days_to_sell ?? undefined,
   createdAt: post.date,
 }));
 
@@ -359,4 +364,74 @@ export function getListing(id: string): Listing | undefined {
 
 export function getAllListingIds(): string[] {
   return LISTINGS.map((car) => car.id);
+}
+
+// ---------- Ежедневная аналитика: вкладка /admin/daily и два поста в Telegram канал
+
+// Дни (по Ташкенту), за которые есть хотя бы minCount объявлений, свежие первыми.
+// Неполный день (парсер ещё не прошёл) так отсекается сам.
+export function getListingDays(minCount = 10): string[] {
+  const counts: Record<string, number> = {};
+  for (const car of LISTINGS) {
+    const day = tashkentDay(car.createdAt);
+    if (day) counts[day] = (counts[day] ?? 0) + 1;
+  }
+  return Object.keys(counts)
+    .filter((day) => counts[day] >= minCount)
+    .sort((a, b) => b.localeCompare(a));
+}
+
+// Насколько цена ниже рыночной: 0.19 значит на 19% дешевле похожих машин
+export function marketDiscount(listing: Listing): number | undefined {
+  if (!listing.market || listing.price === undefined || listing.market.price <= 0) return undefined;
+  return 1 - listing.price / listing.market.price;
+}
+
+const DIGEST_MIN_SIMILAR = 8; // оценке рынка по меньшему числу похожих машин для поста не доверяем
+
+export type DailyDigest = {
+  day: string;
+  total: number; // объявлений за день
+  inStock: number; // в наличии и не проданы
+  withPrice: number;
+  belowMarket: number;
+  medianPrice?: number; // по машинам в наличии, USD
+  topBrands: { brand: string; count: number }[];
+  deals: Listing[]; // картинка «Ниже рынка»: самая большая выгода в долларах против похожих машин
+  best: Listing[]; // картинка «Самые красивые»: самые дорогие машины дня
+};
+
+// Что появилось за один день. В посты идут только машины в наличии, с ценой и фото, не проданные:
+// под заказ и CIP это не «предложение дня», а прайс.
+export function getDailyDigest(day: string, limit = 5): DailyDigest {
+  const todays = LISTINGS.filter((car) => tashkentDay(car.createdAt) === day);
+  const inStock = todays.filter((car) => !car.isSold && !car.priceType);
+  const priced = inStock.filter((car) => car.price !== undefined && car.currency === "USD");
+  const prices = priced.map((car) => car.price!).sort((a, b) => a - b);
+  const brands: Record<string, number> = {};
+  for (const car of inStock) if (car.brand) brands[car.brand] = (brands[car.brand] ?? 0) + 1;
+  const postable = priced.filter((car) => car.image && car.brand);
+  const deals = postable
+    .filter((car) => car.market?.label === "below" && car.market.count >= DIGEST_MIN_SIMILAR)
+    .sort((a, b) => b.market!.price - b.price! - (a.market!.price - a.price!)) // у кого больше выгода в долларах
+    .slice(0, limit);
+  const dealIds = new Set(deals.map((car) => car.id));
+  const best = postable
+    .filter((car) => !dealIds.has(car.id))
+    .sort((a, b) => b.price! - a.price!)
+    .slice(0, limit);
+  return {
+    day,
+    total: todays.length,
+    inStock: inStock.length,
+    withPrice: priced.length,
+    belowMarket: inStock.filter((car) => car.market?.label === "below").length,
+    medianPrice: prices.length ? prices[Math.floor(prices.length / 2)] : undefined,
+    topBrands: Object.entries(brands)
+      .map(([brand, count]) => ({ brand, count }))
+      .sort((a, b) => b.count - a.count || a.brand.localeCompare(b.brand))
+      .slice(0, 5),
+    deals,
+    best,
+  };
 }

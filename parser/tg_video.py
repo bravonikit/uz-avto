@@ -41,12 +41,16 @@ from pathlib import Path
 import requests
 
 from accounts import DATA_DIR
+from card_paths import FRAMES_NAME, VIDEO_NAME, CardIndex
 
 TG_DIR = DATA_DIR / "_tg"
 FRESH_DAYS = 14
 FRAMES = 8
 MAX_SECONDS = 180  # раскадровка только по первым трём минутам
 MAX_MB = 400  # больше не качаем: это уже не обзор машины, а фильм
+# Ролик сначала ложится на диск Мака и ждёт выгрузки на Google Диск. Свободного места меньше этого:
+# скачку останавливаем, следующий видеопрогон продолжит, когда Диск выгрузит уже скачанное.
+MIN_FREE_GB = 5
 HEAVY_LIMIT = 150  # тяжёлых за обычный ежедневный прогон, чтобы Telegram не начал притормаживать аккаунт
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"}
 
@@ -71,21 +75,46 @@ def archive_root() -> Path | None:
 
 
 class Places:
-    """Где лежат сырые ролики и раскадровка: на Диске, а без Диска локально."""
+    """Где лежат сырые ролики и раскадровка: на Диске в папке поста (card_paths.py), а без Диска локально.
+
+    До 19.11.2026 ролики лежали в <архив>/data/_tg/<канал>/videos/, раскадровка в <архив>/videos/<канал>/.
+    Пока migrate_cards.py не перенёс старое, ролик и раскадровка находятся и по старому месту.
+    """
 
     def __init__(self) -> None:
-        archive = archive_root()
-        self.raw_root = archive / "data" / "_tg" if archive else TG_DIR
-        self.cut_root = archive / "videos" if archive else None
+        self.archive = archive_root()
+        self.cards = CardIndex()
+        self.raw_root = self.archive / "data" / "_tg" if self.archive else TG_DIR  # старое место роликов
+        self.cut_root = self.archive / "videos" if self.archive else None  # старое место раскадровки
+
+    def card(self, channel: str, post_id) -> Path | None:
+        return self.cards.card_dir(self.archive, channel, post_id) if self.archive else None
 
     def raw(self, channel: str, post_id) -> Path:
-        return self.raw_root / channel / "videos" / f"{post_id}.mp4"
+        old = self.raw_root / channel / "videos" / f"{post_id}.mp4"
+        card = self.card(channel, post_id)
+        if card is None:
+            return old
+        new = card / VIDEO_NAME
+        return old if old.exists() and not new.exists() else new
 
     def cut(self, channel: str, post_id) -> Path:
         name = f"tg-{channel}-{post_id}"
-        if self.cut_root:
-            return self.cut_root / channel / name
-        return TG_DIR / channel / "videos" / name
+        card = self.card(channel, post_id)
+        if card is None:
+            return TG_DIR / channel / "videos" / name
+        old, new = self.cut_root / channel / name, card / FRAMES_NAME
+        return old if old.exists() and not new.exists() else new
+
+    def videos(self, channel: str) -> list[tuple[str, Path]]:
+        """Скачанные ролики канала: (номер поста, файл), свежие первыми."""
+        found = []
+        for post_id, post in self.cards.channel_posts(channel).items():
+            if post.get("video_url") or post.get("video_thumbs") or post.get("type") == "video":
+                path = self.raw(channel, post_id)
+                if path.exists():
+                    found.append((post_id, path))
+        return sorted(found, key=lambda item: int(item[0]), reverse=True)
 
 
 def video_posts(channel: str, days: int) -> list[dict]:
@@ -201,10 +230,18 @@ def cut(ffmpeg: str, channel: str, post: dict, places: Places, redo: bool) -> st
 def download_step(channels: list[str], places: Places, args) -> None:
     done = failed = skipped = waiting = heavy = megabytes = 0
     telegram = Telegram()
+    no_space = False
     try:
         for channel in channels:
+            if no_space:
+                break
             for post in video_posts(channel, args.days):
                 if done + failed >= args.limit:
+                    break
+                free_gb = shutil.disk_usage(Path.home()).free / 1e9
+                if free_gb < MIN_FREE_GB:
+                    print(f"Видео: на диске свободно {free_gb:.1f} ГБ, меньше {MIN_FREE_GB} ГБ. Скачка остановлена, продолжит следующий прогон")
+                    no_space = True
                     break
                 is_heavy = not post.get("video_url")
                 if args.light_only and is_heavy:
@@ -232,7 +269,7 @@ def download_step(channels: list[str], places: Places, args) -> None:
     finally:
         telegram.close()
     print(f"Видео, скачка: новых {done} ({megabytes:.0f} МБ, через аккаунт {heavy}), не вышло {failed}, "
-          f"уже были {skipped}, тяжёлых ждут {waiting}. Папка: {places.raw_root}/<канал>/videos")
+          f"уже были {skipped}, тяжёлых ждут {waiting}. Ролики лежат в папках постов: <архив>/cards/<канал>/<день>_<id>/video.mp4")
 
 
 def cut_step(channels: list[str], places: Places, args) -> None:

@@ -12,6 +12,7 @@ export function AdminNav({ waiting, review, showLogout, logout }: Props) {
     { href: "/admin", label: "Заявки", count: waiting },
     { href: "/admin/review", label: "Ручной разбор", count: review },
     { href: "/admin/channel", label: "Канал", count: 0 },
+    { href: "/admin/daily", label: "Аналитика дня", count: 0 },
   ];
   return (
     <nav className="mb-6 flex flex-wrap items-center gap-2">
